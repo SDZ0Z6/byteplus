@@ -117,6 +117,45 @@ BytePlus **没有任何接口返回"原授信额度"**。已穷举探测过 22 �
 已核对 `PosttaxAmount == PaidAmount + UnpaidAmount == RealValue`。
 字段优先级见 `app/api.py` 的 `SPEND_FIELDS`。
 
+## 账单明细（下钻面板）
+
+主表每行有「明细 ›」按钮，当期消费金额本身也可点，打开全屏面板看该账号该账期的
+**资源级**账单：产品 / 实例名 / 实例ID / 地域 / 规格 / 计费方式 / 单价 / 用量 /
+原始金额 / 抹零 / 应付金额 / 项目，按产品分两级并带小计。
+
+* **按需加载** —— 不点开就不查，一次调用约 0.2 秒
+* **hash 路由** `#/detail/<uid>/<period>` —— 浏览器返回键能关面板，刷新能恢复。
+  hash 不发给服务器，所以 `server.py` 路由和 nginx 配置都不用动
+* 关闭方式：`×` / `Esc` / 点遮罩 / 浏览器返回键
+* 页脚会把合计和主表那一格**做对账**并显式标 ✓ 或 ⚠
+
+### GroupTerm 的真实语义
+
+`ListBillDetail` 的 `GroupTerm` 参数，`script/byteplus_billing.py` 的 help 文本写的是
+`2=按实例`，**实测是错的**：
+
+| | `GroupTerm=0` | `GroupTerm=2` |
+|---|---|---|
+| 粒度 | **每个资源一行** | 每个**产品**一行 |
+| bytep168 行数 | 7 | 4 |
+| `InstanceName` / `InstanceNo` / `Region` / `ConfigName` / `Price` | 有 | **全空** |
+| 空/占位字段 | 少 | 49 / 96 |
+
+`GroupTerm=2` 的粒度等同 `ListBillOverviewByProd`，对账用不上。**所以面板用
+`GroupTerm=0`**，产品级汇总在前端按 `ProductZh` 分组算出来，一次调用拿两种粒度。
+
+### 金额精度
+
+明细里抹零差额常在 `1e-5` 量级（实测 `0.000025`），所以**原始金额和抹零两列用
+最多 6 位小数**显示（`amt6()`），只显示 2 位会变成 `0.00`，那正好把这两列要解释的
+东西抹掉了。应付金额始终是分位精度，用 2 位。
+
+举例：某块云盘原始 `0.38421`、抹零 `0.38421`、应付 `0.00` —— 显示成 6 位才看得出
+「不是漏算，是整笔被抹零了」。
+
+> 明细行没有稳定主键：`BillDetailId` 返回 `-`、`BillID` 是空串。前端用
+> `InstanceNo + ConfigurationCode + ElementCode + 序号` 合成键。
+
 ## 接口限流与缓存
 
 BytePlus 的 OpenAPI 限流很紧 —— 实测并发 12 打过去，24 个请求里 19 个被拒

@@ -294,6 +294,8 @@ class Handler(BaseHTTPRequestHandler):
                                     "auth_enabled": config.auth_enabled(CFG)})
         if path == "/api/accounts":
             return self._api_accounts(parse_qs(parsed.query))
+        if path == "/api/detail":
+            return self._api_detail(parse_qs(parsed.query))
         return self._json(404, {"error": "未找到: {}".format(parsed.path)})
 
     def do_HEAD(self) -> None:  # noqa: N802
@@ -328,6 +330,42 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # pragma: no cover
             return self._json(500, {"error": "采集失败: {}: {}".format(
                 type(exc).__name__, exc)})
+        return self._json(200, payload)
+
+    def _api_detail(self, qs: Dict[str, List[str]]) -> None:
+        """某账号某账期的账单明细。按需调用 —— 不点开就不查。"""
+        uid = (qs.get("uid") or [""])[0].strip()
+        period = (qs.get("period") or [current_period()])[0].strip()
+
+        if not uid:
+            return self._json(400, {"error": "缺少参数 uid"})
+        if not billing.PERIOD_RE.match(period):
+            return self._json(400, {
+                "error": "账期格式不对: '{}'，应为 YYYY-MM".format(period)})
+        if period > current_period():
+            return self._json(400, {"error": "账期 {} 还没到".format(period)})
+
+        try:
+            accounts = load_accounts(CFG["cred_file"])
+        except CredError as exc:
+            return self._json(500, {"error": str(exc), "kind": "cred"})
+
+        acct = next((a for a in accounts if a.uid == uid), None)
+        if acct is None:
+            # 不回显 uid 以外的信息，也不列出有哪些账号
+            return self._json(404, {"error": "找不到 UID 为 {} 的账号".format(uid)})
+
+        started = time.monotonic()
+        try:
+            payload = billing.build_detail(acct, period)
+        except api.BytePlusError as exc:
+            return self._json(502, {"error": exc.message, "detail": exc.as_dict()})
+        except Exception as exc:  # pragma: no cover
+            return self._json(500, {"error": "取明细失败: {}: {}".format(
+                type(exc).__name__, exc)})
+
+        payload["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+        payload["fetched_at"] = utc_now_iso()
         return self._json(200, payload)
 
     # ---- 日志: 绝不打印 Authorization 头 ----

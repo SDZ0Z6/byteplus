@@ -274,6 +274,59 @@ def get_overview(ak: str, sk: str, period: str, page_size: int = 100,
     return out
 
 
+def get_detail(ak: str, sk: str, period: str, group_term: int = 0,
+               group_period: int = 0, page_size: int = 100,
+               timeout: int = DEFAULT_TIMEOUT, max_pages: int = 50) -> dict:
+    """账单明细(ListBillDetail)。period 格式 YYYY-MM。
+
+    GroupTerm 实测语义(和 script/ 里那份 CLI 的 help 文本不一致，以实测为准):
+        0 = 按资源明细 —— 每个资源一行，带 InstanceName / InstanceNo /
+            Region / ConfigName / Price。这是对账要的粒度。
+        2 = 按产品 —— 每个产品一行，且上面那些实例级字段**全部为空**
+            (96 个字段里 49 个变成空/占位)，粒度等同 ListBillOverviewByProd。
+    所以默认用 0。
+
+    翻页: NeedRecordNum=1 时 Total 是真实总数(与 ListBillOverviewByProd
+    返回 -1 不同)，所以既能按"某页不满"判断结束，也能拿 Total 兜底。
+    """
+    items: List[dict] = []
+    result: dict = {}
+    offset = 0
+    total: Optional[int] = None
+    truncated = False
+
+    for page in range(max_pages):
+        result = _result(call(
+            ak, sk, "ListBillDetail", "2022-01-01", "billing",
+            query={"BillPeriod": period, "Limit": page_size, "Offset": offset,
+                   "NeedRecordNum": 1, "GroupTerm": group_term,
+                   "GroupPeriod": group_period},
+            timeout=timeout))
+
+        batch = result.get("List") or []
+        items.extend(batch)
+
+        if total is None:
+            t = to_decimal(result.get("Total"))
+            if t is not None and t >= 0:
+                total = int(t)
+
+        if len(batch) < page_size:
+            break
+        if total is not None and len(items) >= total:
+            break
+        offset += page_size
+        if page == max_pages - 1:
+            truncated = True
+
+    out = dict(result)
+    out["List"] = items
+    out["_total"] = total
+    if truncated:
+        out["_truncated"] = True
+    return out
+
+
 # ===========================================================================
 # 金额解析
 # ===========================================================================

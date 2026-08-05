@@ -85,6 +85,65 @@
   footer{margin-top:14px;font-size:11px;color:var(--muted);line-height:1.75}
   code{background:var(--head);padding:1px 4px;border-radius:3px}
   .skel{padding:36px;text-align:center;color:var(--muted)}
+
+  /* ---- 明细面板：全屏覆盖而不是侧边抽屉 —— 12 列太宽，抽屉塞不下 ---- */
+  .drill{
+    background:transparent;border:1px solid var(--border);color:var(--accent);
+    font-weight:500;padding:4px 10px;font-size:12px;white-space:nowrap;
+  }
+  .drill:hover{background:var(--head)}
+  .amt-link{
+    background:none;border:none;padding:0;font:inherit;color:var(--accent);
+    cursor:pointer;text-decoration:underline;text-decoration-style:dotted;
+    text-underline-offset:3px;
+  }
+  #mask{
+    position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:40;
+    display:none;
+  }
+  #mask.show{display:block}
+  #panel{
+    position:fixed;inset:24px;z-index:50;display:none;
+    background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    box-shadow:0 18px 48px rgba(0,0,0,.28);
+    flex-direction:column;overflow:hidden;
+  }
+  #panel.show{display:flex}
+  .ph{
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    padding:14px 18px;border-bottom:1px solid var(--border);background:var(--head);
+  }
+  .ph h2{font-size:15px;margin:0;font-weight:650}
+  .ph .who{font-size:12px;color:var(--muted)}
+  .pbody{flex:1;overflow:auto;padding:0}
+  .pfoot{
+    padding:11px 18px;border-top:1px solid var(--border);background:var(--head);
+    display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:12px;
+  }
+  .x{
+    background:transparent;border:1px solid var(--border);color:var(--text);
+    border-radius:6px;width:30px;height:30px;padding:0;font-size:17px;line-height:1;
+  }
+  .x:hover{background:var(--panel)}
+  table.det{border-collapse:collapse;width:100%;min-width:1080px}
+  table.det th,table.det td{
+    padding:7px 12px;text-align:right;border-bottom:1px solid var(--border);
+    white-space:nowrap;font-size:12px;
+  }
+  table.det thead th{
+    background:var(--head);position:sticky;top:0;z-index:1;
+    font-weight:600;color:var(--muted);
+  }
+  table.det th.l,table.det td.l{text-align:left}
+  tr.grp td{
+    background:var(--zebra);font-weight:650;cursor:pointer;
+    border-top:1px solid var(--border);
+  }
+  tr.grp td:hover{filter:brightness(.98)}
+  tr.grp .caret{display:inline-block;width:12px;color:var(--muted)}
+  tr.det-row td{color:var(--text)}
+  tr.det-row.hidden{display:none}
+  .zero{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -117,10 +176,11 @@
           <th>已用（累计消费）</th>
           <th id="thPeriod">当期消费</th>
           <th>状态</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="rows">
-        <tr><td colspan="6" class="skel">加载中…</td></tr>
+        <tr><td colspan="7" class="skel">加载中…</td></tr>
       </tbody>
       <tfoot id="foot"></tfoot>
     </table>
@@ -128,6 +188,21 @@
 
   <footer id="notes"></footer>
 
+</div>
+
+<!-- 明细面板。hash 路由驱动(#/detail/<uid>/<period>)，hash 不发给服务器，
+     所以 server.py 的路由和 nginx 配置都不用动。 -->
+<div id="mask"></div>
+<div id="panel" role="dialog" aria-modal="true" aria-labelledby="pTitle">
+  <div class="ph">
+    <h2 id="pTitle">账单明细</h2>
+    <span class="who" id="pWho"></span>
+    <span class="spacer"></span>
+    <span class="stamp" id="pStamp"></span>
+    <button class="x" id="pClose" title="关闭 (Esc)" aria-label="关闭">×</button>
+  </div>
+  <div class="pbody" id="pBody"></div>
+  <div class="pfoot" id="pFoot"></div>
 </div>
 
 <script>
@@ -161,6 +236,19 @@ function money(v, opts){
   return '<span class="num">' + (opts.atLeast ? '≥ ' : '') + s + '</span>';
 }
 function nonZero(v){ const n = Number(v); return isFinite(n) && n !== 0; }
+
+// 原始金额 / 抹零专用: 至少 2 位、最多 6 位小数，去掉多余尾零。
+// 抹零差额常在 1e-5 量级(实测 0.000025)，用 money() 的 2 位小数会显示成
+// "0.00" —— 而这两列的全部意义就是解释"为什么应付是 0"，格式化掉就白显示了。
+function amt6(v){
+  if(v === null || v === undefined || v === '') return '<span class="dim">—</span>';
+  const n = Number(v);
+  if(!isFinite(n)) return esc(String(v));
+  const frac = Math.abs(n).toFixed(6).split('.')[1].replace(/0+$/, '');
+  const dec = frac.length > 2 ? frac.length : 2;
+  return '<span class="num">' + n.toLocaleString('en-US',
+      {minimumFractionDigits: dec, maximumFractionDigits: dec}) + '</span>';
+}
 
 function defaultPeriod(){
   const d = new Date();
@@ -197,7 +285,7 @@ function renderCards(d){
 function renderRows(d){
   const tb = $('rows');
   if(!d.accounts.length){
-    tb.innerHTML = '<tr><td colspan="6" class="skel">cred.xlsx 里没有账号</td></tr>';
+    tb.innerHTML = '<tr><td colspan="7" class="skel">cred.xlsx 里没有账号</td></tr>';
     return;
   }
   let html = '';
@@ -234,22 +322,28 @@ function renderRows(d){
               : '')
           + '</td>';
 
-    // 当期消费
+    // 当期消费 —— 金额本身可点，下钻到明细
     if(a.selected_spend_error){
       html += '<td class="bad">查询失败</td>';
     }else{
-      html += '<td>' + money(sel.total)
+      const clickable = sel.total !== null && sel.total !== undefined;
+      html += '<td>'
+            + (clickable
+                ? '<button class="amt-link" data-uid="' + esc(a.uid) + '" '
+                  + 'title="查看明细">' + money(sel.total) + '</button>'
+                : money(sel.total))
             + (sel.products ? '<div class="meta">' + sel.products + ' 个产品</div>' : '')
             + (sel.from_cache ? '<div class="meta">缓存</div>' : '')
             + (sel.truncated ? '<div class="meta bad">产品数超上限，可能少算</div>' : '')
             + '</td>';
     }
 
-    const ok = a.ok && !a.granted_partial;
     html += '<td>' + (a.ok
         ? (a.granted_partial ? '<span class="pill warn">部分</span>'
                              : '<span class="pill">正常</span>')
-        : '<span class="pill bad">异常</span>') + '</td></tr>';
+        : '<span class="pill bad">异常</span>') + '</td>'
+      + '<td><button class="drill" data-uid="' + esc(a.uid) + '">明细 ›</button></td>'
+      + '</tr>';
 
     const errs = [
       a.quota_error && '授信余额: ' + errText(a.quota_error),
@@ -257,10 +351,10 @@ function renderRows(d){
       a.current_spend_error && '当月消费: ' + errText(a.current_spend_error),
     ].filter(Boolean);
     if(errs.length){
-      html += '<tr class="errline"><td colspan="6">' + errs.join('<br>') + '</td></tr>';
+      html += '<tr class="errline"><td colspan="7">' + errs.join('<br>') + '</td></tr>';
     }
     if(a.notes && a.notes.length){
-      html += '<tr class="noteline"><td colspan="6">' + a.notes.map(esc).join('<br>') + '</td></tr>';
+      html += '<tr class="noteline"><td colspan="7">' + a.notes.map(esc).join('<br>') + '</td></tr>';
     }
   }
   tb.innerHTML = html;
@@ -271,7 +365,7 @@ function renderRows(d){
     + '<td>' + money(t.balance) + '</td>'
     + '<td>' + money(t.used) + '</td>'
     + '<td>' + money(t.selected_spend) + '</td>'
-    + '<td></td></tr>';
+    + '<td></td><td></td></tr>';
 }
 
 function renderNotes(d){
@@ -291,6 +385,8 @@ function renderNotes(d){
     + '<b>模式</b>：当月数据每次刷新都实时查 BytePlus API。账号来自 <code>cred.xlsx</code>，'
     + '改完点刷新即可生效（无需重启）。';
 }
+
+let bootstrapped = false;
 
 async function load(){
   const btn = $('refresh');
@@ -314,15 +410,24 @@ async function load(){
     const data = await res.json();
     if(!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
 
+    // 明细面板要用邮箱和主表金额做对账；账期一起记下来，否则无法判断可比性
+    window.__accounts = data.accounts;
+    window.__accountsPeriod = data.period;
     $('thPeriod').textContent = data.period + ' 消费';
     renderCards(data);
     renderRows(data);
     renderNotes(data);
     $('stamp').textContent = '更新于 ' + fmtLocal(data.fetched_at)
                            + ' · 耗时 ' + data.elapsed_ms + ' ms';
+
+    // 首次加载完再处理 hash —— 这样直接带 #/detail/... 打开时，
+    // 面板标题里能显示邮箱，页脚也能和主表金额对账
+    if(!bootstrapped){ bootstrapped = true; applyRoute(); }
+    // 主表刷新完，面板若开着且同账期，重画页脚把对账结论补上
+    if(detailData && detailData.period === data.period) renderDetailFoot(detailData);
   }catch(e){
     $('err').innerHTML = '<div class="errbox">加载失败: ' + esc(e.message) + '</div>';
-    $('rows').innerHTML = '<tr><td colspan="6" class="skel">—</td></tr>';
+    $('rows').innerHTML = '<tr><td colspan="7" class="skel">—</td></tr>';
     $('foot').innerHTML = ''; $('cards').innerHTML = '';
     $('stamp').textContent = '';
   }finally{
@@ -331,10 +436,186 @@ async function load(){
   }
 }
 
+// ==========================================================================
+// 明细面板
+// ==========================================================================
+// hash 是唯一状态源: 改 hash -> hashchange -> applyRoute()。
+// 好处是浏览器返回键天然能关面板，刷新页面也能恢复(同标签页里 token 还在)。
+const HASH_RE = /^#\/detail\/([0-9]+)\/(\d{4}-(?:0[1-9]|1[0-2]))$/;
+let openedByUs = false;   // 是否由本页操作打开(决定关闭时用 back 还是清 hash)
+let detailData = null;
+
+function openDetail(uid){
+  const period = $('period').value || defaultPeriod();
+  // 赋值 hash 会产生一条历史记录，返回键即可关闭
+  location.hash = '#/detail/' + uid + '/' + period;
+}
+
+function closeDetail(){
+  if(!HASH_RE.test(location.hash)) return;
+  if(openedByUs){
+    history.back();               // 弹掉我们压入的那条记录
+  }else{
+    // 直接带 hash 打开的页面：用 replace 清掉，避免多压一条历史
+    history.replaceState(null, '', location.pathname + location.search);
+    applyRoute();
+  }
+}
+
+function hidePanel(){
+  $('panel').classList.remove('show');
+  $('mask').classList.remove('show');
+  document.body.style.overflow = '';
+  detailData = null;
+}
+
+function applyRoute(){
+  const m = HASH_RE.exec(location.hash);
+  if(!m){ hidePanel(); return; }
+  showPanel(m[1], m[2]);
+}
+
+async function showPanel(uid, period){
+  $('panel').classList.add('show');
+  $('mask').classList.add('show');
+  document.body.style.overflow = 'hidden';   // 背景不跟着滚
+  $('pClose').focus();
+
+  const acct = (window.__accounts || []).find(a => a.uid === uid);
+  $('pTitle').textContent = '账单明细';
+  $('pWho').textContent = (acct ? acct.email + ' · ' : '') + 'UID ' + uid + ' · ' + period;
+  $('pStamp').textContent = '查询中…';
+  $('pBody').innerHTML = '<div class="skel">正在查询 BytePlus API…</div>';
+  $('pFoot').innerHTML = '';
+
+  try{
+    const u = new URL('/api/detail', location.href);
+    u.username = ''; u.password = '';          // fetch 拒绝带凭据的 URL
+    u.searchParams.set('uid', uid);
+    u.searchParams.set('period', period);
+    const res = await fetch(u.toString(), {cache:'no-store', headers: authHeader()});
+    if(res.status === 401){ return toLogin(); }
+    const data = await res.json();
+    if(!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+    detailData = data;
+    renderDetail(data);
+  }catch(e){
+    $('pBody').innerHTML = '<div class="skel bad">取明细失败: ' + esc(e.message) + '</div>';
+    $('pStamp').textContent = '';
+  }
+}
+
+function renderDetail(d){
+  $('pStamp').textContent = '共 ' + d.row_count + ' 条 · 耗时 ' + d.elapsed_ms + ' ms';
+
+  if(!d.groups.length){
+    $('pBody').innerHTML = '<div class="skel">该账期没有消费记录</div>';
+    $('pFoot').innerHTML = '';
+    return;
+  }
+
+  const cur = d.currency ? ' ' + esc(d.currency) : '';
+  let html = '<table class="det"><thead><tr>'
+    + '<th class="l">产品 / 实例</th><th class="l">实例 ID</th><th class="l">地域</th>'
+    + '<th class="l">规格</th><th class="l">计费方式</th><th>单价</th><th>用量</th>'
+    + '<th>原始金额</th><th>抹零</th><th>应付金额</th><th class="l">项目</th>'
+    + '</tr></thead><tbody>';
+
+  d.groups.forEach((g, gi) => {
+    html += '<tr class="grp" data-g="' + gi + '">'
+      + '<td class="l" colspan="7"><span class="caret">▾</span> ' + esc(g.product)
+      +   ' <span class="meta">' + g.rows.length + ' 项</span></td>'
+      + '<td>' + amt6(g.original) + '</td><td></td>'
+      + '<td>' + money(g.payable) + cur + '</td><td></td></tr>';
+
+    g.rows.forEach(r => {
+      const zero = Number(r.payable) === 0 ? ' zero' : '';
+      html += '<tr class="det-row" data-g="' + gi + '">'
+        + '<td class="l">' + esc(r.instance_name || r.instance_id || '—') + '</td>'
+        + '<td class="l dim">' + esc(r.instance_id || '—') + '</td>'
+        + '<td class="l">' + esc(r.region || '—') + '</td>'
+        + '<td class="l dim">' + esc(r.spec || '—') + '</td>'
+        + '<td class="l dim">' + esc(r.billing_mode || '—') + '</td>'
+        + '<td class="dim">' + (r.price ? esc(r.price) + (r.price_unit ? ' <span class="meta">' + esc(r.price_unit) + '</span>' : '') : '—') + '</td>'
+        + '<td class="dim">' + (r.usage ? esc(r.usage) + (r.usage_unit ? ' <span class="meta">' + esc(r.usage_unit) + '</span>' : '') : '—') + '</td>'
+        + '<td class="dim">' + amt6(r.original) + '</td>'
+        + '<td class="' + (Number(r.rounded) ? 'warnval' : 'dim') + '">' + amt6(r.rounded) + '</td>'
+        + '<td class="' + zero + '">' + money(r.payable) + '</td>'
+        + '<td class="l dim">' + esc(r.project || '—') + '</td>'
+        + '</tr>';
+    });
+  });
+  html += '</tbody></table>';
+  $('pBody').innerHTML = html;
+
+  renderDetailFoot(d);
+}
+
+function renderDetailFoot(d){
+  const cur = d.currency ? ' ' + esc(d.currency) : '';
+
+  // 与主表对账。两边都取 PosttaxAmount，应当完全相等。
+  // 必须先确认主表当前就是同一个账期 —— 切账期时主表刷新和面板取数是并发的，
+  // 面板常先返回，拿新账期的金额去比主表里旧账期的数字会报出假警告。
+  const comparable = window.__accountsPeriod === d.period;
+  const main = comparable
+    ? (window.__accounts || []).find(a => a.uid === d.uid) : null;
+  const mainAmt = main && main.selected_spend ? main.selected_spend.total : null;
+  const same = mainAmt !== null && Number(mainAmt) === Number(d.total_payable);
+
+  $('pFoot').innerHTML =
+      '<b>合计应付 ' + money(d.total_payable) + cur + '</b>'
+    + '<span class="dim">原始金额 ' + amt6(d.total_original) + cur
+    + '（差额为抹零）</span>'
+    + (mainAmt !== null
+        ? '<span class="' + (same ? 'good' : 'bad') + '">'
+          + (same ? '✓ 与主表「' + esc(d.period) + ' 消费」一致'
+                  : '⚠ 与主表不一致（主表 ' + esc(String(mainAmt)) + '）')
+          + '</span>'
+        : '')
+    + (d.truncated ? '<span class="bad">⚠ 超出翻页上限，可能不全</span>' : '')
+    + (d.reported_total !== null && d.reported_total !== d.row_count
+        ? '<span class="bad">⚠ 接口报告 ' + d.reported_total + ' 条，实际取到 '
+          + d.row_count + ' 条</span>' : '');
+}
+
+// 产品分组折叠
+$('pBody').addEventListener('click', ev => {
+  const grp = ev.target.closest('tr.grp');
+  if(!grp) return;
+  const gi = grp.dataset.g;
+  const caret = grp.querySelector('.caret');
+  let collapsed = false;
+  $('pBody').querySelectorAll('tr.det-row[data-g="' + gi + '"]').forEach(tr => {
+    tr.classList.toggle('hidden');
+    collapsed = tr.classList.contains('hidden');
+  });
+  caret.textContent = collapsed ? '▸' : '▾';
+});
+
+// 主表上的两个入口
+$('rows').addEventListener('click', ev => {
+  const btn = ev.target.closest('.drill, .amt-link');
+  if(btn && btn.dataset.uid) openDetail(btn.dataset.uid);
+});
+
+$('pClose').addEventListener('click', closeDetail);
+$('mask').addEventListener('click', closeDetail);
+document.addEventListener('keydown', ev => {
+  if(ev.key === 'Escape' && $('panel').classList.contains('show')) closeDetail();
+});
+window.addEventListener('hashchange', () => { openedByUs = true; applyRoute(); });
+
 $('period').value = defaultPeriod();
 $('period').max = defaultPeriod();
 $('refresh').addEventListener('click', load);
-$('period').addEventListener('change', load);
+// 换账期时如果面板开着，让它跟着换 —— 否则面板内容和账期选择器会不一致。
+// 先等主表刷完再开面板: 并发的话面板会拿新账期的金额去比主表里旧账期的数字。
+$('period').addEventListener('change', async () => {
+  const m = HASH_RE.exec(location.hash);
+  await load();
+  if(m) openDetail(m[1]);
+});
 
 // 只有确实带着凭据时才显示退出按钮(未启用验证时不显示)
 if(sessionStorage.getItem(AUTH_KEY)){

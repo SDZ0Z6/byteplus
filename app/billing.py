@@ -299,3 +299,109 @@ def build_account(acct: Account, selected_period: str, current_period: str,
     row["ok"] = not (row["quota_error"] or row["current_spend_error"]
                      or row["selected_spend_error"])
     return row
+
+
+# ===========================================================================
+# 账单明细(下钻面板用)
+# ===========================================================================
+def _text(item: Dict[str, Any], *names: str) -> Optional[str]:
+    """取第一个有内容的字段。API 用 "-" 和 "" 表示"无"，都当空处理。"""
+    for n in names:
+        v = item.get(n)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s and s != "-":
+            return s
+    return None
+
+
+def _detail_row(item: Dict[str, Any], index: int) -> Dict[str, Any]:
+    """从 96 个字段里挑出展示需要的，金额一律走 Decimal 保精度。
+
+    注意明细接口的抹零字段叫 RoundAmount(不是概览的 RoundBillAmount)，
+    而且可能是科学计数法(实测 "2.5e-05") —— 必须用 Decimal，float 会丢精度。
+    """
+    instance_id = _text(item, "InstanceNo", "ResourceID")
+    # 明细行没有稳定主键: BillDetailId 返回 "-"、BillID 是空串。
+    # 这里合成一个，供前端做排序/展开状态用。
+    key = "|".join([
+        instance_id or "",
+        _text(item, "ConfigurationCode") or "",
+        _text(item, "ElementCode") or "",
+        str(index),
+    ])
+    payable = api.to_decimal(api.pick(item, *api.SPEND_FIELDS))
+    original = api.to_decimal(_text(item, "OriginalBillAmount"))
+    rounded = api.to_decimal(_text(item, "RoundAmount", "RoundBillAmount"))
+
+    return {
+        "key": key,
+        "product": _text(item, "ProductZh", "ProductName", "Product") or "(未命名)",
+        "instance_name": _text(item, "InstanceName"),
+        "instance_id": instance_id,
+        "region": _text(item, "Region", "RegionCode"),
+        "spec": _text(item, "ConfigName", "ConfigurationCode"),
+        "billing_mode": _text(item, "BillingMode"),
+        "price": _text(item, "Price"),
+        "price_unit": _text(item, "PriceUnit"),
+        "usage": _text(item, "UseDuration"),
+        "usage_unit": _text(item, "UseDurationUnit"),
+        "original": str(original) if original is not None else None,
+        "rounded": str(rounded) if rounded is not None else None,
+        "payable": str(payable) if payable is not None else None,
+        "project": _text(item, "ProjectDisplayName", "Project"),
+        "currency": _text(item, "Currency"),
+    }
+
+
+def build_detail(acct: Account, period: str,
+                 group_term: int = 0) -> Dict[str, Any]:
+    """拉取并组装一个账号某账期的明细，按产品分两级 + 小计。
+
+    合计必须等于主表那一格「当期消费」—— 两边都取 SPEND_FIELDS 里同一个字段
+    (实测 PosttaxAmount)，已验证三个账号完全一致。
+    """
+    raw = api.get_detail(acct.ak, acct.sk, period, group_term=group_term)
+    items = raw.get("List") or []
+    rows = [_detail_row(it, i) for i, it in enumerate(items)]
+
+    # 按产品分组，保持接口返回的先后顺序
+    groups: List[Dict[str, Any]] = []
+    index_of: Dict[str, int] = {}
+    for row in rows:
+        name = row["product"]
+        if name not in index_of:
+            index_of[name] = len(groups)
+            groups.append({"product": name, "rows": [],
+                           "payable": Decimal("0"), "original": Decimal("0")})
+        g = groups[index_of[name]]
+        g["rows"].append(row)
+        for field in ("payable", "original"):
+            d = api.to_decimal(row[field])
+            if d is not None:
+                g[field] += d
+
+    total_payable = sum((g["payable"] for g in groups), Decimal("0"))
+    total_original = sum((g["original"] for g in groups), Decimal("0"))
+    # 金额大的产品排前面，方便一眼看出钱花在哪
+    groups.sort(key=lambda g: g["payable"], reverse=True)
+
+    currency = next((r["currency"] for r in rows if r["currency"]), None)
+
+    return {
+        "email": acct.email,
+        "uid": acct.uid,
+        "period": period,
+        "group_term": group_term,
+        "currency": currency,
+        "row_count": len(rows),
+        "reported_total": raw.get("_total"),
+        "truncated": bool(raw.get("_truncated")),
+        "groups": [{"product": g["product"],
+                    "payable": str(g["payable"]),
+                    "original": str(g["original"]),
+                    "rows": g["rows"]} for g in groups],
+        "total_payable": str(total_payable),
+        "total_original": str(total_original),
+    }
