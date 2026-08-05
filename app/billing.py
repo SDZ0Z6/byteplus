@@ -355,12 +355,17 @@ def _detail_row(item: Dict[str, Any], index: int) -> Dict[str, Any]:
     }
 
 
-def build_detail(acct: Account, period: str,
-                 group_term: int = 0) -> Dict[str, Any]:
+def build_detail(acct: Account, period: str, group_term: int = 0,
+                 with_overview: bool = True) -> Dict[str, Any]:
     """拉取并组装一个账号某账期的明细，按产品分两级 + 小计。
 
-    合计必须等于主表那一格「当期消费」—— 两边都取 SPEND_FIELDS 里同一个字段
+    明细合计必须等于概览合计 —— 两边都取 SPEND_FIELDS 里同一个字段
     (实测 PosttaxAmount)，已验证三个账号完全一致。
+
+    with_overview=True 时会额外查一次概览(约 +0.25 秒)，把它的合计一起返回，
+    让明细页能**自己**完成对账。明细页是独立页面，拿不到主表那份数据，
+    所以对账结论必须由服务端提供，否则只能靠 URL 传参(不可信)或
+    重新拉取全部账号的汇总(太贵)。
     """
     raw = api.get_detail(acct.ak, acct.sk, period, group_term=group_term)
     items = raw.get("List") or []
@@ -389,10 +394,27 @@ def build_detail(acct: Account, period: str,
 
     currency = next((r["currency"] for r in rows if r["currency"]), None)
 
+    # 概览合计 —— 供明细页自对账。取不到就把错误带上，页面上标"无法核对"，
+    # 绝不能静默当作"一致"。
+    overview_total: Optional[str] = None
+    overview_error: Optional[Dict[str, Any]] = None
+    if with_overview:
+        try:
+            ov = api.get_overview(acct.ak, acct.sk, period)
+            ov_total, ov_cur, _n, _f = api.sum_spend(ov.get("List") or [])
+            if ov_total is not None:
+                overview_total = str(ov_total)
+            if currency is None:
+                currency = ov_cur
+        except api.BytePlusError as exc:
+            overview_error = exc.as_dict()
+
     return {
         "email": acct.email,
         "uid": acct.uid,
         "period": period,
+        "overview_total": overview_total,
+        "overview_error": overview_error,
         "group_term": group_term,
         "currency": currency,
         "row_count": len(rows),

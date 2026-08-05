@@ -86,6 +86,24 @@ function showMsg(text){
   m.classList.add('show');
 }
 
+// 登录成功后回到哪里。**必须校验** —— 不校验的话
+// /login.html?returnTo=https://evil.com 就把登录页变成了开放重定向，
+// 用户输完密码直接被送去钓鱼站。
+function safeReturnTo(){
+  let raw;
+  try{
+    raw = new URLSearchParams(location.search).get('returnTo');
+  }catch(e){ return '/'; }
+  if(!raw) return '/';
+  // 必须以单个 / 开头: 挡掉绝对 URL 和 //evil.com 这种协议相对地址
+  if(!/^\/[^/\\]/.test(raw)) return '/';
+  // 挡掉 javascript: data: 之类；我们自己的路径不含冒号
+  if(raw.includes(':')) return '/';
+  // 别绕回登录页自己，否则会来回弹
+  if(raw.split('?')[0] === '/login.html') return '/';
+  return raw;
+}
+
 // 已经登录过就直接进主页
 (async function autoRedirect(){
   const token = sessionStorage.getItem(KEY);
@@ -93,7 +111,7 @@ function showMsg(text){
   try{
     const res = await fetch('/api/verify', {
       headers: {'Authorization': 'Basic ' + token}, cache: 'no-store'});
-    if(res.ok) location.replace('/');
+    if(res.ok) location.replace(safeReturnTo());
     else sessionStorage.removeItem(KEY);
   }catch(e){ /* 网络问题就正常显示登录表单 */ }
 })();
@@ -112,7 +130,7 @@ $('form').addEventListener('submit', async ev => {
 
     if(res.ok){
       sessionStorage.setItem(KEY, token);
-      location.replace('/');
+      location.replace(safeReturnTo());
       return;
     }
     if(res.status === 429){

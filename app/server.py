@@ -39,6 +39,8 @@ from app.creds import Account, CredError, load_accounts  # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_PATH = os.path.join(HERE, "index.html")
 LOGIN_PATH = os.path.join(HERE, "login.html")
+DETAIL_PATH = os.path.join(HERE, "detail.html")
+COMMON_JS_PATH = os.path.join(HERE, "common.js")
 
 # 按需求: 所有账号均以美金授信/结算
 CURRENCY = "USD"
@@ -280,6 +282,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_asset(LOGIN_PATH)
         if path in ("/", "/index.html"):
             return self._serve_asset(INDEX_PATH)
+        if path == "/detail.html":
+            return self._serve_asset(DETAIL_PATH)
+        if path == "/common.js":
+            return self._serve_asset(
+                COMMON_JS_PATH, "application/javascript; charset=utf-8")
         if path == "/favicon.ico":
             return self._send(204, b"", "image/x-icon")
 
@@ -301,14 +308,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_HEAD(self) -> None:  # noqa: N802
         self.do_GET()
 
-    def _serve_asset(self, file_path: str) -> None:
+    def _serve_asset(self, file_path: str,
+                     content_type: str = "text/html; charset=utf-8") -> None:
         try:
             with open(file_path, "rb") as fh:
                 body = fh.read()
         except OSError as exc:
             return self._json(500, {"error": "读不到 {}: {}".format(
                 os.path.basename(file_path), exc)})
-        self._send(200, body, "text/html; charset=utf-8")
+        self._send(200, body, content_type)
 
     def _api_accounts(self, qs: Dict[str, List[str]]) -> None:
         period = (qs.get("period") or [current_period()])[0].strip()
