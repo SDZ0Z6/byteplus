@@ -1,0 +1,13 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "username": "",
+  "password": "",
+
+  "cred_file": "cred.xlsx",
+  "cache_file": "cache/history.json",
+
+  "history_months": 36,
+  "empty_months_stop": 6,
+  "warm_cache_on_start": true
+}
