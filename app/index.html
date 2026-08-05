@@ -267,6 +267,36 @@ function renderNotes(d){
     + '改完点刷新即可生效（无需重启）。';
 }
 
+function applyData(data){
+  $('thPeriod').textContent = data.period + ' 消费';
+  renderCards(data);
+  renderRows(data);
+  renderNotes(data);
+}
+
+// ---- 返回总览时不重查 ------------------------------------------------------
+// 从明细页按返回键回来，本不该重新查一遍所有账号的接口。
+// 首选是浏览器 bfcache(整页从内存恢复)，服务端已把页面文档的 Cache-Control
+// 从 no-store 改成 no-cache 来保住它 —— 但 bfcache 还会被"附加了调试器"、
+// 内存压力、超时等因素取消，不能指望。所以这里再兜一层:
+// 离开前把总览数据存进 sessionStorage，返回导航时直接拿它渲染。
+const SNAP_KEY = 'bp_overview_snap';
+const SNAP_TTL_MS = 10 * 60 * 1000;   // 超过 10 分钟就宁可重查
+
+function saveSnapshot(data){
+  try{
+    sessionStorage.setItem(SNAP_KEY, JSON.stringify({at: Date.now(), data: data}));
+  }catch(e){ /* 配额满/隐私模式下失败无所谓，退化成重新查询 */ }
+}
+
+function loadSnapshot(){
+  try{
+    const s = JSON.parse(sessionStorage.getItem(SNAP_KEY) || 'null');
+    if(!s || !s.data || (Date.now() - s.at) > SNAP_TTL_MS) return null;
+    return s.data;
+  }catch(e){ return null; }
+}
+
 // 明细页链接。带上当前账期，这样详情页打开就是同一个月。
 function detailHref(uid){
   const p = $('period').value || defaultPeriod();
@@ -296,10 +326,8 @@ async function load(){
     const data = await res.json();
     if(!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
 
-    $('thPeriod').textContent = data.period + ' 消费';
-    renderCards(data);
-    renderRows(data);
-    renderNotes(data);
+    applyData(data);
+    saveSnapshot(data);
     $('stamp').textContent = '更新于 ' + fmtLocal(data.fetched_at)
                            + ' · 耗时 ' + data.elapsed_ms + ' ms';
   }catch(e){
@@ -325,7 +353,30 @@ if(sessionStorage.getItem(AUTH_KEY)){
   btn.hidden = false;
   btn.addEventListener('click', toLogin);
 }
-load();
+
+// 如果这次是"返回/前进"导航(从明细页回来)，且手上有没过期的快照，
+// 就直接渲染它，不打接口。其它情况(首次打开、刷新、手动输地址)照常查。
+const navEntry = performance.getEntriesByType('navigation')[0] || {};
+const snapshot = navEntry.type === 'back_forward' ? loadSnapshot() : null;
+
+if(snapshot){
+  $('period').value = snapshot.period;
+  applyData(snapshot);
+  $('stamp').innerHTML = '更新于 ' + fmtLocal(snapshot.fetched_at)
+    + ' <span class="dim">· 返回时的数据，点刷新可更新</span>';
+}else{
+  load();
+}
+
+// bfcache 真正生效时脚本不会重跑，页面整个从内存恢复 —— 那样更好(连滚动位置
+// 都在)。这里只把时间戳标注一下，让人知道看到的不是刚查的。
+window.addEventListener('pageshow', ev => {
+  if(!ev.persisted) return;
+  const s = $('stamp').textContent;
+  if(s && s.indexOf('返回时的数据') === -1){
+    $('stamp').innerHTML = esc(s) + ' <span class="dim">· 返回时的数据，点刷新可更新</span>';
+  }
+});
 </script>
 </body>
 </html>

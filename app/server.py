@@ -191,13 +191,22 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "BytePlusBilling/2.0"
     protocol_version = "HTTP/1.1"
 
+    # 业务数据必须 no-store，绝不能落盘。
+    NO_STORE = "no-store, no-cache, must-revalidate"
+    # 但**页面文档不能带 no-store** —— Chrome 会因此判定该页不进 bfcache，
+    # 于是从明细页按返回键时整页重新执行、把所有账号的接口重查一遍。
+    # 页面外壳本身不含任何业务数据，用 no-cache(每次 revalidate)就够，
+    # 既不会用到过期的 HTML，又保住了 bfcache。
+    REVALIDATE = "no-cache, must-revalidate"
+
     # ---- 输出 ----
     def _send(self, status: int, body: bytes, content_type: str,
-              extra: Optional[Dict[str, str]] = None) -> None:
+              extra: Optional[Dict[str, str]] = None,
+              cache: Optional[str] = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Cache-Control", cache or self.NO_STORE)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Frame-Options", "DENY")
@@ -316,7 +325,7 @@ class Handler(BaseHTTPRequestHandler):
         except OSError as exc:
             return self._json(500, {"error": "读不到 {}: {}".format(
                 os.path.basename(file_path), exc)})
-        self._send(200, body, content_type)
+        self._send(200, body, content_type, cache=self.REVALIDATE)
 
     def _api_accounts(self, qs: Dict[str, List[str]]) -> None:
         period = (qs.get("period") or [current_period()])[0].strip()
