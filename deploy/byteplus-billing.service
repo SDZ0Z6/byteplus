@@ -1,0 +1,41 @@
+[Unit]
+Description=BytePlus 授信/账单管理
+Documentation=file:/opt/byteplus-billing/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=byteplus
+Group=byteplus
+WorkingDirectory=/opt/byteplus-billing
+ExecStart=/usr/bin/python3 /opt/byteplus-billing/app/server.py
+
+# 也可以把用户名密码放这里而不是 config.json(前缀 - 表示文件不存在也不报错)
+# 文件内容形如:  BP_USERNAME=admin
+#                BP_PASSWORD=xxxx
+EnvironmentFile=-/etc/byteplus-billing.env
+
+Restart=on-failure
+RestartSec=5
+
+# ---- 安全加固 ----
+# 这个进程持有所有 BytePlus 账号的 SK，尽量缩小它能碰到的东西
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# ProtectSystem=strict 把整个文件系统挂成只读，只有这里列出的目录可写
+ReadWritePaths=/opt/byteplus-billing/cache
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=byteplus-billing
+
+[Install]
+WantedBy=multi-user.target

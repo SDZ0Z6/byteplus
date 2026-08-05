@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BytePlus Kuromi 平台</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#fff; --border:#e3e6ea; --text:#1c1f23; --muted:#6b7280;
+    --accent:#2563eb; --ok:#128a52; --warn:#b45309; --err:#c2261a;
+    --err-bg:#fdf2f1; --head:#f0f2f5; --zebra:#fafbfc; --bar:#dfe3e8;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#15181c; --panel:#1c2025; --border:#2e343b; --text:#e6e9ed; --muted:#98a1ac;
+      --accent:#5b9cff; --ok:#3ecf8e; --warn:#e0a049; --err:#ff6b5e;
+      --err-bg:#2a1c1a; --head:#22272d; --zebra:#1f2429; --bar:#333a42;
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:22px; background:var(--bg); color:var(--text);
+    font:14px/1.5 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  }
+  .wrap{max-width:1180px;margin:0 auto}
+  header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+  h1{font-size:20px;margin:0;font-weight:650}
+  .sub{color:var(--muted);font-size:12px}
+  .toolbar{
+    display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+    background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    padding:12px 14px;margin-bottom:16px;
+  }
+  label{font-size:12px;color:var(--muted)}
+  input[type=month]{
+    font:inherit;padding:6px 8px;border:1px solid var(--border);border-radius:6px;
+    background:var(--bg);color:var(--text);
+  }
+  button{
+    font:inherit;font-weight:550;padding:7px 15px;border-radius:6px;cursor:pointer;
+    border:1px solid transparent;background:var(--accent);color:#fff;
+  }
+  button:hover:not(:disabled){filter:brightness(1.08)}
+  button:disabled{opacity:.55;cursor:progress}
+  button.ghost{background:transparent;border-color:var(--border);color:var(--muted);font-weight:500}
+  .spacer{flex:1}
+  .stamp{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+  .cards{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+  .card{
+    background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    padding:12px 16px;min-width:168px;flex:1;
+  }
+  .card .k{font-size:11px;color:var(--muted);letter-spacing:.3px}
+  .card .v{font-size:21px;font-weight:600;margin-top:3px;font-variant-numeric:tabular-nums}
+
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow-x:auto}
+  table{border-collapse:collapse;width:100%;min-width:820px}
+  th,td{padding:10px 14px;text-align:right;border-bottom:1px solid var(--border);white-space:nowrap}
+  thead th{background:var(--head);font-size:12px;font-weight:600;color:var(--muted)}
+  th.l,td.l{text-align:left}
+  tbody tr:nth-child(even of :not(.errline)){background:var(--zebra)}
+  .num{font-variant-numeric:tabular-nums}
+  .acct{font-weight:550}
+  .meta{font-size:11px;color:var(--muted);font-weight:400}
+  .dim{color:var(--muted)}
+  .bad{color:var(--err)}
+  .warnval{color:var(--warn)}
+  .strong{font-weight:600}
+  .pill{
+    display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;
+    background:rgba(18,138,82,.12);color:var(--ok);
+  }
+  .pill.bad{background:rgba(194,38,26,.12);color:var(--err)}
+  .pill.warn{background:rgba(180,83,9,.14);color:var(--warn)}
+  .errbox{
+    background:var(--err-bg);border:1px solid var(--err);color:var(--err);
+    border-radius:8px;padding:12px 14px;margin-bottom:16px;white-space:pre-wrap;
+  }
+  .errline td{font-size:11px;color:var(--err);text-align:left;padding:2px 14px 8px;background:none}
+  .noteline td{font-size:11px;color:var(--warn);text-align:left;padding:2px 14px 8px;background:none}
+  .bar{height:4px;background:var(--bar);border-radius:99px;margin-top:5px;overflow:hidden}
+  .bar>i{display:block;height:100%;background:var(--accent);border-radius:99px}
+  tfoot td{font-weight:600;background:var(--head)}
+  footer{margin-top:14px;font-size:11px;color:var(--muted);line-height:1.75}
+  code{background:var(--head);padding:1px 4px;border-radius:3px}
+  .skel{padding:36px;text-align:center;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>BytePlus Kuromi 平台</h1>
+    <span class="sub">原授信额度 · 授信余额 · 已用 · 消费（全部美金 USD）</span>
+  </header>
+
+  <div class="toolbar">
+    <label for="period">账期</label>
+    <input type="month" id="period">
+    <button id="refresh">刷新</button>
+    <span class="spacer"></span>
+    <span class="stamp" id="stamp"></span>
+    <button class="ghost" id="logout" hidden>退出登录</button>
+  </div>
+
+  <div id="err"></div>
+  <div class="cards" id="cards"></div>
+
+  <div class="panel">
+    <table>
+      <thead>
+        <tr>
+          <th class="l">账号</th>
+          <th>原授信额度</th>
+          <th>授信余额</th>
+          <th>已用（累计消费）</th>
+          <th id="thPeriod">当期消费</th>
+          <th>状态</th>
+        </tr>
+      </thead>
+      <tbody id="rows">
+        <tr><td colspan="6" class="skel">加载中…</td></tr>
+      </tbody>
+      <tfoot id="foot"></tfoot>
+    </table>
+  </div>
+
+  <footer id="notes"></footer>
+
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// ---- 认证 ----------------------------------------------------------------
+// 凭据只存在当前标签页的 sessionStorage 里，服务端不保存任何 session。
+// 关闭标签页即失效；每个请求自带 Authorization 头。
+const AUTH_KEY = 'bp_auth';
+
+function authHeader(){
+  const t = sessionStorage.getItem(AUTH_KEY);
+  return t ? {'Authorization': 'Basic ' + t} : {};
+}
+function toLogin(){
+  sessionStorage.removeItem(AUTH_KEY);
+  location.replace('/login.html');
+}
+
+function esc(s){
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+// 后端传字符串以保精度，这里只做展示层格式化
+function money(v, opts){
+  opts = opts || {};
+  if(v === null || v === undefined || v === '') return '<span class="dim">—</span>';
+  const n = Number(v);
+  if(!isFinite(n)) return esc(String(v));
+  const s = n.toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2});
+  return '<span class="num">' + (opts.atLeast ? '≥ ' : '') + s + '</span>';
+}
+function nonZero(v){ const n = Number(v); return isFinite(n) && n !== 0; }
+
+function defaultPeriod(){
+  const d = new Date();
+  return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0');
+}
+function fmtLocal(iso){
+  if(!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleString('zh-CN',{hour12:false});
+}
+function errText(e){
+  if(!e) return '';
+  const bits = [];
+  if(e.code) bits.push('['+esc(e.code)+']');
+  bits.push(esc(e.message || '未知错误'));
+  if(e.rate_limit) bits.push('(接口限流，稍后重试)');
+  return bits.join(' ');
+}
+
+function renderCards(d){
+  const t = d.totals || {};
+  const cur = ' <span class="dim" style="font-size:12px;font-weight:400">'+esc(d.currency)+'</span>';
+  const items = [
+    ['账号数', String(d.account_count) + (d.error_count ? ' <span class="bad" style="font-size:12px">'+d.error_count+' 异常</span>' : '')],
+    ['原授信额度合计', money(t.granted, {atLeast: d.totals_partial}) + cur],
+    ['授信余额合计', money(t.balance) + cur],
+    ['已用合计', money(t.used) + cur],
+    [esc(d.period) + ' 消费合计', money(t.selected_spend) + cur],
+  ];
+  $('cards').innerHTML = items.map(([k,v]) =>
+    '<div class="card"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>').join('');
+}
+
+function renderRows(d){
+  const tb = $('rows');
+  if(!d.accounts.length){
+    tb.innerHTML = '<tr><td colspan="6" class="skel">cred.xlsx 里没有账号</td></tr>';
+    return;
+  }
+  let html = '';
+  for(const a of d.accounts){
+    const q = a.quota || {};
+    const sel = a.selected_spend || {};
+    const granted = Number(a.granted), used = Number(a.used);
+    const pct = (isFinite(granted) && granted > 0 && isFinite(used))
+      ? Math.max(0, Math.min(100, used / granted * 100)) : null;
+
+    html += '<tr>'
+      + '<td class="l"><div class="acct">' + esc(a.email || '(无邮箱)') + '</div>'
+      +   '<div class="meta">UID ' + esc(a.uid) + ' · ' + esc(a.ak_masked) + '</div></td>';
+
+    // 原授信额度（推算值）
+    html += '<td class="strong">' + money(a.granted, {atLeast: a.granted_partial})
+          + (a.granted_partial ? '<div class="meta bad">数据不完整</div>' : '')
+          + '</td>';
+
+    // 授信余额
+    if(a.quota_error){
+      html += '<td class="bad">查询失败</td>';
+    }else{
+      html += '<td>' + money(q.balance)
+            + (nonZero(q.frozen) ? '<div class="meta warnval">冻结 ' + esc(q.frozen) + '</div>' : '')
+            + '</td>';
+    }
+
+    // 已用（累计消费）+ 占比条
+    html += '<td>' + money(a.used)
+          + (pct !== null
+              ? '<div class="meta">' + pct.toFixed(1) + '%</div>'
+                + '<div class="bar"><i style="width:' + pct.toFixed(1) + '%"></i></div>'
+              : '')
+          + '</td>';
+
+    // 当期消费
+    if(a.selected_spend_error){
+      html += '<td class="bad">查询失败</td>';
+    }else{
+      html += '<td>' + money(sel.total)
+            + (sel.products ? '<div class="meta">' + sel.products + ' 个产品</div>' : '')
+            + (sel.from_cache ? '<div class="meta">缓存</div>' : '')
+            + (sel.truncated ? '<div class="meta bad">产品数超上限，可能少算</div>' : '')
+            + '</td>';
+    }
+
+    const ok = a.ok && !a.granted_partial;
+    html += '<td>' + (a.ok
+        ? (a.granted_partial ? '<span class="pill warn">部分</span>'
+                             : '<span class="pill">正常</span>')
+        : '<span class="pill bad">异常</span>') + '</td></tr>';
+
+    const errs = [
+      a.quota_error && '授信余额: ' + errText(a.quota_error),
+      a.selected_spend_error && '当期消费: ' + errText(a.selected_spend_error),
+      a.current_spend_error && '当月消费: ' + errText(a.current_spend_error),
+    ].filter(Boolean);
+    if(errs.length){
+      html += '<tr class="errline"><td colspan="6">' + errs.join('<br>') + '</td></tr>';
+    }
+    if(a.notes && a.notes.length){
+      html += '<tr class="noteline"><td colspan="6">' + a.notes.map(esc).join('<br>') + '</td></tr>';
+    }
+  }
+  tb.innerHTML = html;
+
+  const t = d.totals || {};
+  $('foot').innerHTML = '<tr><td class="l">合计</td>'
+    + '<td>' + money(t.granted, {atLeast: d.totals_partial}) + '</td>'
+    + '<td>' + money(t.balance) + '</td>'
+    + '<td>' + money(t.used) + '</td>'
+    + '<td>' + money(t.selected_spend) + '</td>'
+    + '<td></td></tr>';
+}
+
+function renderNotes(d){
+  const backs = d.accounts.map(a => a.scanned_back_to).filter(Boolean).sort();
+  $('notes').innerHTML =
+      '<b>原授信额度是推算值</b>：BytePlus 接口没有这个字段，用 '
+    + '<code>授信余额 + 累计消费</code> 算出来（已用真实数据核对：'
+    + '188.71 + 11.29 = 200.00、999.92 + 0.08 = 1000.00）。'
+    + '授信余额是按消费扣减的，所以「已用」就等于累计消费。<br>'
+    + '<b>精度</b>：额度扣减比账单接口略有延迟，所以推算出的原授信额度可能在几分钱范围内波动'
+    + '（实测同一账号在 1538.00 / 1538.02 之间跳）。真实授信通常是整数，可据此判断。<br>'
+    + '<b>累计消费的范围</b>：从当月往前逐月累加，连续无消费的月份达到设定数量即停'
+    + (backs.length ? '（本次最早扫到 ' + esc(backs[0]) + '）' : '')
+    + '。已结账的月份会永久缓存，所以每次刷新只重新查当月。'
+    + '若某个账期取数失败，该账号的原授信额度会标成 <code>≥</code> 下限值，不会把失败当成 0。<br>'
+    + '<b>币种</b>：按需求统一按 ' + esc(d.currency) + ' 显示。<br>'
+    + '<b>模式</b>：当月数据每次刷新都实时查 BytePlus API。账号来自 <code>cred.xlsx</code>，'
+    + '改完点刷新即可生效（无需重启）。';
+}
+
+async function load(){
+  const btn = $('refresh');
+  btn.disabled = true;
+  btn.textContent = '查询中…';
+  $('err').innerHTML = '';
+  $('stamp').textContent = '正在查询 BytePlus API…';
+
+  const period = $('period').value || defaultPeriod();
+  try{
+    // 若页面是用 http://user:pass@host/ 这种带凭据的地址打开的(Basic Auth 下
+    // 有人会这么存书签)，相对 URL 会继承这段凭据，而 fetch() 拒绝带凭据的 URL。
+    // 这里显式清掉。
+    const u = new URL('/api/accounts', location.href);
+    u.username = ''; u.password = '';
+    u.searchParams.set('period', period);
+    const res = await fetch(u.toString(), {cache:'no-store', headers: authHeader()});
+
+    // 未登录 / 凭据失效 -> 回登录页。凭据只在浏览器里，服务端无 session。
+    if(res.status === 401){ return toLogin(); }
+    const data = await res.json();
+    if(!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+
+    $('thPeriod').textContent = data.period + ' 消费';
+    renderCards(data);
+    renderRows(data);
+    renderNotes(data);
+    $('stamp').textContent = '更新于 ' + fmtLocal(data.fetched_at)
+                           + ' · 耗时 ' + data.elapsed_ms + ' ms';
+  }catch(e){
+    $('err').innerHTML = '<div class="errbox">加载失败: ' + esc(e.message) + '</div>';
+    $('rows').innerHTML = '<tr><td colspan="6" class="skel">—</td></tr>';
+    $('foot').innerHTML = ''; $('cards').innerHTML = '';
+    $('stamp').textContent = '';
+  }finally{
+    btn.disabled = false;
+    btn.textContent = '刷新';
+  }
+}
+
+$('period').value = defaultPeriod();
+$('period').max = defaultPeriod();
+$('refresh').addEventListener('click', load);
+$('period').addEventListener('change', load);
+
+// 只有确实带着凭据时才显示退出按钮(未启用验证时不显示)
+if(sessionStorage.getItem(AUTH_KEY)){
+  const btn = $('logout');
+  btn.hidden = false;
+  btn.addEventListener('click', toLogin);
+}
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+# ⚠ 凭据与配置 —— 绝不能进版本库
+cred.xlsx
+cred*.xlsx
+cred*.csv
+config.json
+*.enc
+.env
+
+# 服务器 ssh 密钥
+byteplus-kuromi-portal.pem
+
+# 历史账期缓存(可安全删除，会自动重建)
+cache/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Excel 临时锁文件
+~$*.xlsx
