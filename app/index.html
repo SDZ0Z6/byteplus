@@ -93,10 +93,6 @@
     font-size:12px;font-weight:500;color:var(--accent);
   }
   a.drill:hover{background:var(--head)}
-  a.amt-link{
-    color:var(--accent);text-decoration:underline;
-    text-decoration-style:dotted;text-underline-offset:3px;
-  }
 
 </style>
 </head>
@@ -203,16 +199,11 @@ function renderRows(d){
               : '')
           + '</td>';
 
-    // 当期消费 —— 金额本身可点，下钻到明细
+    // 当期消费 —— 纯展示，不做跳转；下钻统一走行尾的「明细 ›」按钮
     if(a.selected_spend_error){
       html += '<td class="bad">查询失败</td>';
     }else{
-      const clickable = sel.total !== null && sel.total !== undefined;
-      html += '<td>'
-            + (clickable
-                ? '<a class="amt-link" href="' + detailHref(a.uid) + '" '
-                  + 'title="查看明细">' + money(sel.total) + '</a>'
-                : money(sel.total))
+      html += '<td>' + money(sel.total)
             + (sel.products ? '<div class="meta">' + sel.products + ' 个产品</div>' : '')
             + (sel.from_cache ? '<div class="meta">缓存</div>' : '')
             + (sel.truncated ? '<div class="meta bad">产品数超上限，可能少算</div>' : '')
