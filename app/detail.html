@@ -87,7 +87,10 @@
 <div class="wrap">
 
   <header>
-    <a class="back" href="/" id="back">‹ 返回总览</a>
+    <!-- restore=1 告诉总览页"这是返回，可以用快照" —— 点链接属于前进导航
+         (navigation.type = navigate)，拿不到 back_forward 那条路径。
+         referrer 也用不了: 响应头设了 Referrer-Policy: no-referrer，恒为空。 -->
+    <a class="back" href="/?restore=1" id="back">‹ 返回总览</a>
     <h1>账单明细</h1>
     <span class="sub" id="who"></span>
   </header>
@@ -135,7 +138,6 @@ function setPeriod(p){
   u.searchParams.set('uid', UID);
   u.searchParams.set('period', p);
   history.replaceState(null, '', u.pathname + u.search);
-  $('back').href = '/';
 }
 
 function render(d){

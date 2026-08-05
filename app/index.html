@@ -354,10 +354,25 @@ if(sessionStorage.getItem(AUTH_KEY)){
   btn.addEventListener('click', toLogin);
 }
 
-// 如果这次是"返回/前进"导航(从明细页回来)，且手上有没过期的快照，
-// 就直接渲染它，不打接口。其它情况(首次打开、刷新、手动输地址)照常查。
+// 什么时候算"从明细页回来"，可以直接用快照而不重查:
+//   1. 浏览器返回/前进键 -> navigation.type === 'back_forward'
+//   2. 明细页的「返回总览」链接 -> 那是**前进导航**(type = navigate)，
+//      拿不到上面那条路径，所以链接上带了 ?restore=1 作为显式标记。
+//      (本想用 document.referrer 判断来源，但响应头设了 Referrer-Policy:
+//       no-referrer，它恒为空，用不了。)
+// 其它情况一律照常查: 首次打开、刷新页面、手动输地址。
 const navEntry = performance.getEntriesByType('navigation')[0] || {};
-const snapshot = navEntry.type === 'back_forward' ? loadSnapshot() : null;
+let wantRestore = navEntry.type === 'back_forward';
+try{
+  if(new URLSearchParams(location.search).get('restore') === '1') wantRestore = true;
+}catch(e){ /* 忽略 */ }
+
+// 标记用完就把地址栏洗干净，别让 ?restore=1 被收藏或分享出去
+if(location.search){
+  history.replaceState(null, '', location.pathname);
+}
+
+const snapshot = wantRestore ? loadSnapshot() : null;
 
 if(snapshot){
   $('period').value = snapshot.period;
