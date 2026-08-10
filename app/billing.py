@@ -30,6 +30,8 @@ BytePlus 的 GetQuotaAcctInfo **没有**"原授信额度"字段，只有当前�
 
 from __future__ import annotations
 
+import calendar
+import datetime
 import json
 import os
 import re
@@ -335,14 +337,17 @@ def _detail_row(item: Dict[str, Any], index: int) -> Dict[str, Any]:
     original = api.to_decimal(_text(item, "OriginalBillAmount"))
     rounded = api.to_decimal(_text(item, "RoundAmount", "RoundBillAmount"))
 
+    billing_mode = _text(item, "BillingMode")
     return {
         "key": key,
+        "date": _text(item, "ExpenseDate", "ExpenseBeginTime"),
+        "is_usage": _is_usage_mode(billing_mode),
         "product": _text(item, "ProductZh", "ProductName", "Product") or "(未命名)",
         "instance_name": _text(item, "InstanceName"),
         "instance_id": instance_id,
         "region": _text(item, "Region", "RegionCode"),
         "spec": _text(item, "ConfigName", "ConfigurationCode"),
-        "billing_mode": _text(item, "BillingMode"),
+        "billing_mode": billing_mode,
         "price": _text(item, "Price"),
         "price_unit": _text(item, "PriceUnit"),
         "usage": _text(item, "UseDuration"),
@@ -355,43 +360,105 @@ def _detail_row(item: Dict[str, Any], index: int) -> Dict[str, Any]:
     }
 
 
+# 「按量付费」的判定。只有这一类适合画成日消费曲线 —— 包月/预付资源会把整笔
+# 费用记在购买或续费**当天**，混进曲线会变成一根假尖峰(实测 08-04 的 52.16 里
+# 有 51.15 是包月一次性入账，而真正的用量高峰 08-06 反而被压得看不见)。
+_USAGE_MODES = {"pay-as-you-go", "payasyougo", "pay as you go", "postpaid"}
+
+
+def _is_usage_mode(mode: Optional[str]) -> bool:
+    return (mode or "").strip().lower() in _USAGE_MODES
+
+
+def _month_days(period: str,
+                today: Optional[datetime.date] = None) -> Tuple[List[str], bool, str]:
+    """列出该账期要显示的日期。返回 (日期列表, 是否当月, 截止日)。
+
+    当月只列到今天 —— 列满 31 天会让人以为"后面 21 天消费为零"。
+    """
+    year, month = int(period[:4]), int(period[5:7])
+    last = calendar.monthrange(year, month)[1]
+    today = today or datetime.datetime.now(datetime.timezone.utc).date()
+    is_current = (year, month) == (today.year, today.month)
+    if is_current:
+        last = min(last, today.day)
+    days = ["{}-{:02d}".format(period, d) for d in range(1, last + 1)]
+    return days, is_current, (days[-1] if days else period + "-01")
+
+
 def build_detail(acct: Account, period: str, group_term: int = 0,
                  with_overview: bool = True) -> Dict[str, Any]:
-    """拉取并组装一个账号某账期的明细，按产品分两级 + 小计。
+    """拉取并组装一个账号某账期的**日维度**明细。
 
-    明细合计必须等于概览合计 —— 两边都取 SPEND_FIELDS 里同一个字段
-    (实测 PosttaxAmount)，已验证三个账号完全一致。
+    用 GroupPeriod=1 让接口按天拆(ExpenseDate 才会有值)，GroupTerm=0 保持
+    资源级 —— 实测这个组合下 InstanceName/InstanceNo/Region/ConfigName/Price
+    全部保留，而 GroupTerm=2 会把它们清空。
+
+    金额按计费方式分成两份:
+      usage  按量付费 —— 每天真实累积，适合画日消费柱状图
+      fixed  包月/预付 —— 整笔记在购买或续费当天，不入图，单独汇总一行
+    两者相加仍等于概览合计(已验证 83.96 / 22.70)。
 
     with_overview=True 时会额外查一次概览(约 +0.25 秒)，把它的合计一起返回，
-    让明细页能**自己**完成对账。明细页是独立页面，拿不到主表那份数据，
-    所以对账结论必须由服务端提供，否则只能靠 URL 传参(不可信)或
-    重新拉取全部账号的汇总(太贵)。
+    让明细页能**自己**完成对账 —— 它是独立页面，拿不到总览页那份数据。
     """
-    raw = api.get_detail(acct.ak, acct.sk, period, group_term=group_term)
+    raw = api.get_detail(acct.ak, acct.sk, period, group_term=group_term,
+                         group_period=1)
     items = raw.get("List") or []
     rows = [_detail_row(it, i) for i, it in enumerate(items)]
 
-    # 按产品分组，保持接口返回的先后顺序
-    groups: List[Dict[str, Any]] = []
-    index_of: Dict[str, int] = {}
-    for row in rows:
-        name = row["product"]
-        if name not in index_of:
-            index_of[name] = len(groups)
-            groups.append({"product": name, "rows": [],
-                           "payable": Decimal("0"), "original": Decimal("0")})
-        g = groups[index_of[name]]
-        g["rows"].append(row)
-        for field in ("payable", "original"):
-            d = api.to_decimal(row[field])
-            if d is not None:
-                g[field] += d
+    day_list, is_current, through = _month_days(period)
+    # 接口返回的日期若超出上面这个范围(理论上不该有)，也补进去，别丢数据
+    extra = sorted({r["date"] for r in rows if r["date"]} - set(day_list))
+    all_days = sorted(set(day_list) | set(extra))
 
+    days: Dict[str, Dict[str, Any]] = {
+        d: {"date": d, "rows": [], "usage": Decimal("0"), "fixed": Decimal("0"),
+            "payable": Decimal("0"), "original": Decimal("0")}
+        for d in all_days
+    }
+    undated: List[Dict[str, Any]] = []
+
+    for row in rows:
+        bucket = days.get(row["date"]) if row["date"] else None
+        if bucket is None:
+            undated.append(row)      # 没有日期的行不能凭空塞进某一天
+            continue
+        bucket["rows"].append(row)
+        payable = api.to_decimal(row["payable"]) or Decimal("0")
+        original = api.to_decimal(row["original"]) or Decimal("0")
+        bucket["payable"] += payable
+        bucket["original"] += original
+        bucket["usage" if row["is_usage"] else "fixed"] += payable
+
+    for bucket in days.values():
+        # 同一天内金额大的排前面
+        bucket["rows"].sort(key=lambda r: api.to_decimal(r["payable"]) or Decimal("0"),
+                            reverse=True)
+
+    groups = [days[d] for d in all_days]
+    usage_total = sum((g["usage"] for g in groups), Decimal("0"))
+    fixed_total = sum((g["fixed"] for g in groups), Decimal("0"))
     total_payable = sum((g["payable"] for g in groups), Decimal("0"))
     total_original = sum((g["original"] for g in groups), Decimal("0"))
-    # 金额大的产品排前面，方便一眼看出钱花在哪
-    groups.sort(key=lambda g: g["payable"], reverse=True)
+    for row in undated:               # 无日期的行仍要计入合计，否则对不上账
+        total_payable += api.to_decimal(row["payable"]) or Decimal("0")
+        total_original += api.to_decimal(row["original"]) or Decimal("0")
+        if row["is_usage"]:
+            usage_total += api.to_decimal(row["payable"]) or Decimal("0")
+        else:
+            fixed_total += api.to_decimal(row["payable"]) or Decimal("0")
 
+    # 包月部分按产品汇总，给"单独一行"用
+    fixed_by_product: Dict[str, Decimal] = {}
+    for row in rows:
+        if row["is_usage"]:
+            continue
+        amt = api.to_decimal(row["payable"]) or Decimal("0")
+        fixed_by_product[row["product"]] = \
+            fixed_by_product.get(row["product"], Decimal("0")) + amt
+
+    max_usage = max((g["usage"] for g in groups), default=Decimal("0"))
     currency = next((r["currency"] for r in rows if r["currency"]), None)
 
     # 概览合计 —— 供明细页自对账。取不到就把错误带上，页面上标"无法核对"，
@@ -420,10 +487,23 @@ def build_detail(acct: Account, period: str, group_term: int = 0,
         "row_count": len(rows),
         "reported_total": raw.get("_total"),
         "truncated": bool(raw.get("_truncated")),
-        "groups": [{"product": g["product"],
-                    "payable": str(g["payable"]),
-                    "original": str(g["original"]),
-                    "rows": g["rows"]} for g in groups],
+        # 日维度: 每天一个条目，无消费的日子也在(值为 0)，否则柱状图日期会断
+        "days": [{"date": g["date"],
+                  "usage": str(g["usage"]),
+                  "fixed": str(g["fixed"]),
+                  "payable": str(g["payable"]),
+                  "original": str(g["original"]),
+                  "rows": g["rows"]} for g in groups],
+        "undated_rows": undated,
+        "usage_total": str(usage_total),
+        "fixed_total": str(fixed_total),
+        "fixed_by_product": [{"product": p, "amount": str(a)}
+                             for p, a in sorted(fixed_by_product.items(),
+                                                key=lambda kv: kv[1],
+                                                reverse=True)],
+        "max_usage": str(max_usage),
+        "is_current_month": is_current,
+        "through": through,
         "total_payable": str(total_payable),
         "total_original": str(total_original),
     }

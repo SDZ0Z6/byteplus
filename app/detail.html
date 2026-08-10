@@ -74,6 +74,65 @@
     border-radius:8px;padding:12px 14px;margin-bottom:16px;white-space:pre-wrap;
   }
   .skel{padding:40px;text-align:center;color:var(--muted)}
+
+  /* ---- 日消费柱状图 ------------------------------------------------------
+     单序列，所以不需要图例(标题即序列名)。配色用经校验的 slot-1 蓝:
+     本应用的 --accent 在暗色面板上亮度超标(L 0.695，带宽 0.48–0.67)，
+     validate_palette.py 判 FAIL，所以图元另用一档。 */
+  .chart{
+    background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    padding:14px 18px 10px;margin-bottom:16px;
+    --series-1:#2a78d6; --grid:#e1e0d9; --baseline:#c3c2b7;
+  }
+  @media (prefers-color-scheme:dark){
+    .chart{ --series-1:#3987e5; --grid:#2c2c2a; --baseline:#383835; }
+  }
+  .chart-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .chart-head h2{font-size:13px;margin:0;font-weight:650}
+  .chart-head .hint{font-size:11px;color:var(--muted)}
+  .chart-head .spacer{flex:1}
+  .plot{
+    display:flex;align-items:flex-end;gap:2px;height:132px;
+    border-bottom:1px solid var(--baseline);
+    background:linear-gradient(var(--grid),var(--grid)) 0 33.3%/100% 1px no-repeat,
+               linear-gradient(var(--grid),var(--grid)) 0 66.6%/100% 1px no-repeat;
+  }
+  .col{flex:1;height:100%;display:flex;align-items:flex-end;position:relative;min-width:0}
+  .col .bar{
+    width:100%;background:var(--series-1);
+    border-radius:4px 4px 0 0;      /* 数据端 4px 圆角，底端贴基线 */
+    /* 非零值至少 2px —— 小额日子(实测 0.04)按比例只有 0.3px，
+       画出来和"零"完全看不出区别，那等于把数据弄丢了。零值仍然是零。 */
+    min-height:2px;
+  }
+  .col.zero .bar{height:0;min-height:0}
+  .col .tip{
+    display:none;position:absolute;bottom:100%;left:50%;transform:translateX(-50%);
+    margin-bottom:6px;white-space:nowrap;z-index:5;
+    background:var(--panel);border:1px solid var(--border);border-radius:6px;
+    padding:5px 9px;font-size:11px;line-height:1.5;
+    box-shadow:0 4px 14px rgba(0,0,0,.18);color:var(--text);
+  }
+  .col:hover .tip{display:block}
+  /* 两端的列: 提示框改为贴边对齐，否则居中会溢出图表外 */
+  .col:first-child .tip,.col:nth-child(2) .tip{left:0;transform:none}
+  .col:last-child .tip,.col:nth-last-child(2) .tip{left:auto;right:0;transform:none}
+  .col:hover .bar{filter:brightness(1.12)}
+  /* 命中区域比柱子宽，细柱也好悬停 */
+  .col::after{content:'';position:absolute;inset:0}
+  .xaxis{display:flex;gap:2px;margin-top:5px}
+  .xaxis span{
+    flex:1;text-align:center;font-size:10px;color:var(--muted);
+    font-variant-numeric:tabular-nums;min-width:0;overflow:hidden;
+  }
+  .xaxis span.mark{color:var(--warn);font-weight:700}
+  .fixedline{
+    display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;
+    margin-top:12px;padding-top:10px;border-top:1px solid var(--border);
+    font-size:12px;
+  }
+  .daycell{font-variant-numeric:tabular-nums}
+  tr.grp td .sub{font-weight:400;color:var(--muted);font-size:11px;margin-left:8px}
   .totals{
     display:flex;gap:16px;flex-wrap:wrap;align-items:center;
     background:var(--panel);border:1px solid var(--border);border-radius:10px;
@@ -104,6 +163,7 @@
   </div>
 
   <div id="err"></div>
+  <div id="chart"></div>
   <div class="panel"><table>
     <thead><tr>
       <th class="l">产品 / 实例</th><th class="l">实例 ID</th><th class="l">地域</th>
@@ -140,6 +200,57 @@ function setPeriod(p){
   history.replaceState(null, '', u.pathname + u.search);
 }
 
+// 单序列柱状图: 只画按量付费。包月/预付整笔记在购买当天，混进来会变成一根
+// 假尖峰，把真实的用量高峰压得看不见 —— 所以它走下面的汇总行，不入图。
+function renderChart(d){
+  const cur = d.currency ? ' ' + d.currency : '';
+  const max = Number(d.max_usage) || 0;
+  const days = d.days || [];
+
+  if(!days.length){ $('chart').innerHTML = ''; return; }
+
+  const bars = days.map(g => {
+    const v = Number(g.usage) || 0;
+    const pct = max > 0 ? (v / max * 100) : 0;
+    const dd = g.date.slice(8);              // 只显示日号
+    const hasFixed = Number(g.fixed) > 0;
+    const tip = esc(g.date) + '<br>按量 ' + v.toFixed(2) + esc(cur)
+              + (hasFixed ? '<br>包月 ' + Number(g.fixed).toFixed(2) + esc(cur) : '')
+              + (g.rows.length ? '<br><span class="dim">' + g.rows.length + ' 项</span>' : '');
+    return {
+      col: '<div class="col' + (v > 0 ? '' : ' zero') + '">'
+         +   '<div class="bar" style="height:' + pct.toFixed(2) + '%"></div>'
+         +   '<div class="tip">' + tip + '</div>'
+         + '</div>',
+      // 有包月入账的日子标一下，否则会疑惑"表格里这天有 51.15，图上怎么没有"
+      label: '<span class="' + (hasFixed ? 'mark' : '') + '" title="'
+           + esc(g.date) + (hasFixed ? ' 有包月入账' : '') + '">' + dd + '</span>'
+    };
+  });
+
+  $('chart').innerHTML =
+      '<div class="chart">'
+    + '<div class="chart-head">'
+    +   '<h2>按量付费日消费</h2>'
+    +   '<span class="hint">' + esc(d.period)
+    +     (d.is_current_month ? ' · 截至 ' + esc(d.through) : '') + '</span>'
+    +   '<span class="spacer"></span>'
+    +   '<span class="hint">峰值 ' + (max ? max.toFixed(2) : '0.00') + esc(cur) + '</span>'
+    + '</div>'
+    + '<div class="plot">' + bars.map(b => b.col).join('') + '</div>'
+    + '<div class="xaxis">' + bars.map(b => b.label).join('') + '</div>'
+    + '<div class="fixedline">'
+    +   '<b>包月 / 预付 ' + money(d.fixed_total) + esc(cur) + '</b>'
+    +   (d.fixed_by_product && d.fixed_by_product.length
+          ? '<span class="dim">' + d.fixed_by_product.map(x =>
+              esc(x.product) + ' ' + Number(x.amount).toFixed(2)).join(' · ') + '</span>'
+          : '')
+    +   '<span class="dim">整笔记在购买/续费当天，不计入上图（日号标'
+    +     '<span class="warnval">橙色</span>的即是）</span>'
+    + '</div>'
+    + '</div>';
+}
+
 function render(d){
   $('who').textContent = (d.email ? d.email + ' · ' : '') + 'UID ' + d.uid + ' · ' + d.period;
   document.title = '账单明细 · ' + (d.email || d.uid);
@@ -147,20 +258,32 @@ function render(d){
 
   const cur = d.currency ? ' <span class="dim">' + esc(d.currency) + '</span>' : '';
 
-  if(!d.groups.length){
+  renderChart(d);
+
+  const withRows = d.days.filter(g => g.rows.length);
+  if(!withRows.length){
     $('rows').innerHTML = '<tr><td colspan="11" class="skel">该账期没有消费记录</td></tr>';
   }else{
     let html = '';
-    d.groups.forEach((g, gi) => {
+    // 只列有数据的日子；无消费的日子在柱状图上已经能看出来，
+    // 表格里再塞一堆空行只会把有用的行挤下去
+    withRows.forEach((g, gi) => {
+      const parts = [];
+      if(Number(g.usage)) parts.push('按量 ' + Number(g.usage).toFixed(2));
+      if(Number(g.fixed)) parts.push('包月 ' + Number(g.fixed).toFixed(2));
       html += '<tr class="grp" data-g="' + gi + '">'
-        + '<td class="l" colspan="7"><span class="caret">▾</span> ' + esc(g.product)
-        +   ' <span class="meta">' + g.rows.length + ' 项</span></td>'
+        + '<td class="l" colspan="7"><span class="caret">▾</span> '
+        +   '<span class="daycell">' + esc(g.date) + '</span>'
+        +   '<span class="sub">' + g.rows.length + ' 项'
+        +   (parts.length ? ' · ' + esc(parts.join(' · ')) : '') + '</span></td>'
         + '<td>' + amt6(g.original) + '</td><td></td>'
         + '<td>' + money(g.payable) + cur + '</td><td></td></tr>';
 
       g.rows.forEach(r => {
         html += '<tr class="det-row" data-g="' + gi + '">'
-          + '<td class="l">' + esc(r.instance_name || r.instance_id || '—') + '</td>'
+          + '<td class="l"><div>' + esc(r.product) + '</div>'
+          +   '<div class="meta">' + esc(r.instance_name || r.instance_id || '—')
+          +   '</div></td>'
           + '<td class="l dim">' + esc(r.instance_id || '—') + '</td>'
           + '<td class="l">' + esc(r.region || '—') + '</td>'
           + '<td class="l dim">' + esc(r.spec || '—') + '</td>'
@@ -195,6 +318,8 @@ function render(d){
 
   $('totals').innerHTML =
       '<b>合计应付 ' + money(d.total_payable) + cur + '</b>'
+    + '<span class="dim">按量 ' + money(d.usage_total) + ' + 包月 '
+    +   money(d.fixed_total) + cur + '</span>'
     + '<span class="dim">原始金额 ' + amt6(d.total_original) + cur + '（差额为抹零）</span>'
     + check
     + (d.truncated ? '<span class="bad">⚠ 超出翻页上限，可能不全</span>' : '')
@@ -208,8 +333,14 @@ function render(d){
     + '<b>抹零</b>：原始金额与应付金额的差额。抹零常在 1e-5 量级，所以原始金额和抹零两列'
     + '最多显示 6 位小数 —— 只显示 2 位会变成 0.00，正好把要解释的信息抹掉。'
     + '某行应付为 0 但原始不为 0，说明整笔被抹零了，不是漏算。<br>'
-    + '<b>粒度</b>：<code>GroupTerm=0</code>，每个资源一行（按计费项拆分，'
-    + '同一资源可能出现多行），前端按产品分组。';
+    + '<b>粒度</b>：<code>GroupTerm=0 + GroupPeriod=1</code>，每个资源每天一行'
+    + '（按计费项拆分，同一资源同一天可能出现多行），前端按日期分组。<br>'
+    + '<b>为什么图里只有按量</b>：包月/预付资源会把整笔费用记在<b>购买或续费当天</b>，'
+    + '不是均摊到每天。混进曲线会变成一根假尖峰，把真实的用量高峰压得看不见'
+    + '（实测某天 52.16 里有 51.15 是包月入账，而真正的流量高峰在另一天）。'
+    + '所以图只画按量付费，包月单独汇总一行，两者相加仍等于合计。<br>'
+    + '<b>这张图回答的是「哪天产生了账」</b>，不是「哪天用了多少」—— 对按量付费'
+    + '两者一致，对包月资源不一致。';
 }
 
 async function load(){
