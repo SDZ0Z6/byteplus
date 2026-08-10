@@ -39,6 +39,8 @@ from app.creds import Account, CredError, load_accounts  # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_PATH = os.path.join(HERE, "index.html")
 LOGIN_PATH = os.path.join(HERE, "login.html")
+DETAIL_PATH = os.path.join(HERE, "detail.html")
+COMMON_JS_PATH = os.path.join(HERE, "common.js")
 
 # 按需求: 所有账号均以美金授信/结算
 CURRENCY = "USD"
@@ -189,13 +191,22 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "BytePlusBilling/2.0"
     protocol_version = "HTTP/1.1"
 
+    # 业务数据必须 no-store，绝不能落盘。
+    NO_STORE = "no-store, no-cache, must-revalidate"
+    # 但**页面文档不能带 no-store** —— Chrome 会因此判定该页不进 bfcache，
+    # 于是从明细页按返回键时整页重新执行、把所有账号的接口重查一遍。
+    # 页面外壳本身不含任何业务数据，用 no-cache(每次 revalidate)就够，
+    # 既不会用到过期的 HTML，又保住了 bfcache。
+    REVALIDATE = "no-cache, must-revalidate"
+
     # ---- 输出 ----
     def _send(self, status: int, body: bytes, content_type: str,
-              extra: Optional[Dict[str, str]] = None) -> None:
+              extra: Optional[Dict[str, str]] = None,
+              cache: Optional[str] = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Cache-Control", cache or self.NO_STORE)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Frame-Options", "DENY")
@@ -280,6 +291,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_asset(LOGIN_PATH)
         if path in ("/", "/index.html"):
             return self._serve_asset(INDEX_PATH)
+        if path == "/detail.html":
+            return self._serve_asset(DETAIL_PATH)
+        if path == "/common.js":
+            return self._serve_asset(
+                COMMON_JS_PATH, "application/javascript; charset=utf-8")
         if path == "/favicon.ico":
             return self._send(204, b"", "image/x-icon")
 
@@ -294,19 +310,22 @@ class Handler(BaseHTTPRequestHandler):
                                     "auth_enabled": config.auth_enabled(CFG)})
         if path == "/api/accounts":
             return self._api_accounts(parse_qs(parsed.query))
+        if path == "/api/detail":
+            return self._api_detail(parse_qs(parsed.query))
         return self._json(404, {"error": "未找到: {}".format(parsed.path)})
 
     def do_HEAD(self) -> None:  # noqa: N802
         self.do_GET()
 
-    def _serve_asset(self, file_path: str) -> None:
+    def _serve_asset(self, file_path: str,
+                     content_type: str = "text/html; charset=utf-8") -> None:
         try:
             with open(file_path, "rb") as fh:
                 body = fh.read()
         except OSError as exc:
             return self._json(500, {"error": "读不到 {}: {}".format(
                 os.path.basename(file_path), exc)})
-        self._send(200, body, "text/html; charset=utf-8")
+        self._send(200, body, content_type, cache=self.REVALIDATE)
 
     def _api_accounts(self, qs: Dict[str, List[str]]) -> None:
         period = (qs.get("period") or [current_period()])[0].strip()
@@ -328,6 +347,42 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # pragma: no cover
             return self._json(500, {"error": "采集失败: {}: {}".format(
                 type(exc).__name__, exc)})
+        return self._json(200, payload)
+
+    def _api_detail(self, qs: Dict[str, List[str]]) -> None:
+        """某账号某账期的账单明细。按需调用 —— 不点开就不查。"""
+        uid = (qs.get("uid") or [""])[0].strip()
+        period = (qs.get("period") or [current_period()])[0].strip()
+
+        if not uid:
+            return self._json(400, {"error": "缺少参数 uid"})
+        if not billing.PERIOD_RE.match(period):
+            return self._json(400, {
+                "error": "账期格式不对: '{}'，应为 YYYY-MM".format(period)})
+        if period > current_period():
+            return self._json(400, {"error": "账期 {} 还没到".format(period)})
+
+        try:
+            accounts = load_accounts(CFG["cred_file"])
+        except CredError as exc:
+            return self._json(500, {"error": str(exc), "kind": "cred"})
+
+        acct = next((a for a in accounts if a.uid == uid), None)
+        if acct is None:
+            # 不回显 uid 以外的信息，也不列出有哪些账号
+            return self._json(404, {"error": "找不到 UID 为 {} 的账号".format(uid)})
+
+        started = time.monotonic()
+        try:
+            payload = billing.build_detail(acct, period)
+        except api.BytePlusError as exc:
+            return self._json(502, {"error": exc.message, "detail": exc.as_dict()})
+        except Exception as exc:  # pragma: no cover
+            return self._json(500, {"error": "取明细失败: {}: {}".format(
+                type(exc).__name__, exc)})
+
+        payload["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+        payload["fetched_at"] = utc_now_iso()
         return self._json(200, payload)
 
     # ---- 日志: 绝不打印 Authorization 头 ----

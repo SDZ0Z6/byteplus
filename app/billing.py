@@ -30,6 +30,8 @@ BytePlus 的 GetQuotaAcctInfo **没有**"原授信额度"字段，只有当前�
 
 from __future__ import annotations
 
+import calendar
+import datetime
 import json
 import os
 import re
@@ -299,3 +301,171 @@ def build_account(acct: Account, selected_period: str, current_period: str,
     row["ok"] = not (row["quota_error"] or row["current_spend_error"]
                      or row["selected_spend_error"])
     return row
+
+
+# ===========================================================================
+# 账单明细(下钻面板用)
+# ===========================================================================
+def _text(item: Dict[str, Any], *names: str) -> Optional[str]:
+    """取第一个有内容的字段。API 用 "-" 和 "" 表示"无"，都当空处理。"""
+    for n in names:
+        v = item.get(n)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s and s != "-":
+            return s
+    return None
+
+
+def _detail_row(item: Dict[str, Any], index: int) -> Dict[str, Any]:
+    """从 96 个字段里挑出展示需要的，金额一律走 Decimal 保精度。
+
+    注意明细接口的抹零字段叫 RoundAmount(不是概览的 RoundBillAmount)，
+    而且可能是科学计数法(实测 "2.5e-05") —— 必须用 Decimal，float 会丢精度。
+    """
+    instance_id = _text(item, "InstanceNo", "ResourceID")
+    # 明细行没有稳定主键: BillDetailId 返回 "-"、BillID 是空串。
+    # 这里合成一个，供前端做排序/展开状态用。
+    key = "|".join([
+        instance_id or "",
+        _text(item, "ConfigurationCode") or "",
+        _text(item, "ElementCode") or "",
+        str(index),
+    ])
+    payable = api.to_decimal(api.pick(item, *api.SPEND_FIELDS))
+    original = api.to_decimal(_text(item, "OriginalBillAmount"))
+    rounded = api.to_decimal(_text(item, "RoundAmount", "RoundBillAmount"))
+
+    billing_mode = _text(item, "BillingMode")
+    return {
+        "key": key,
+        "date": _text(item, "ExpenseDate", "ExpenseBeginTime"),
+        "product": _text(item, "ProductZh", "ProductName", "Product") or "(未命名)",
+        "instance_name": _text(item, "InstanceName"),
+        "instance_id": instance_id,
+        "region": _text(item, "Region", "RegionCode"),
+        "spec": _text(item, "ConfigName", "ConfigurationCode"),
+        "billing_mode": billing_mode,
+        "price": _text(item, "Price"),
+        "price_unit": _text(item, "PriceUnit"),
+        "usage": _text(item, "UseDuration"),
+        "usage_unit": _text(item, "UseDurationUnit"),
+        "original": str(original) if original is not None else None,
+        "rounded": str(rounded) if rounded is not None else None,
+        "payable": str(payable) if payable is not None else None,
+        "project": _text(item, "ProjectDisplayName", "Project"),
+        "currency": _text(item, "Currency"),
+    }
+
+
+def _month_days(period: str,
+                today: Optional[datetime.date] = None) -> Tuple[List[str], bool, str]:
+    """列出该账期要显示的日期。返回 (日期列表, 是否当月, 截止日)。
+
+    当月只列到今天 —— 列满 31 天会让人以为"后面 21 天消费为零"。
+    """
+    year, month = int(period[:4]), int(period[5:7])
+    last = calendar.monthrange(year, month)[1]
+    today = today or datetime.datetime.now(datetime.timezone.utc).date()
+    is_current = (year, month) == (today.year, today.month)
+    if is_current:
+        last = min(last, today.day)
+    days = ["{}-{:02d}".format(period, d) for d in range(1, last + 1)]
+    return days, is_current, (days[-1] if days else period + "-01")
+
+
+def build_detail(acct: Account, period: str, group_term: int = 0,
+                 with_overview: bool = True) -> Dict[str, Any]:
+    """拉取并组装一个账号某账期的**日维度**明细。
+
+    用 GroupPeriod=1 让接口按天拆(ExpenseDate 才会有值)，GroupTerm=0 保持
+    资源级 —— 实测这个组合下 InstanceName/InstanceNo/Region/ConfigName/Price
+    全部保留，而 GroupTerm=2 会把它们清空。
+
+    日合计不区分计费方式 —— 每行都带 billing_mode，表格里那一列已经说明了。
+    注意包月/预付资源会把整笔费用记在**购买或续费当天**，所以某一天可能明显
+    偏高(实测 08-04 的 52.16 里有 51.15 是包月入账)，那是入账日不是用量日。
+
+    with_overview=True 时会额外查一次概览(约 +0.25 秒)，把它的合计一起返回，
+    让明细页能**自己**完成对账 —— 它是独立页面，拿不到总览页那份数据。
+    """
+    raw = api.get_detail(acct.ak, acct.sk, period, group_term=group_term,
+                         group_period=1)
+    items = raw.get("List") or []
+    rows = [_detail_row(it, i) for i, it in enumerate(items)]
+
+    day_list, is_current, through = _month_days(period)
+    # 接口返回的日期若超出上面这个范围(理论上不该有)，也补进去，别丢数据
+    extra = sorted({r["date"] for r in rows if r["date"]} - set(day_list))
+    all_days = sorted(set(day_list) | set(extra))
+
+    days: Dict[str, Dict[str, Any]] = {
+        d: {"date": d, "rows": [],
+            "payable": Decimal("0"), "original": Decimal("0")}
+        for d in all_days
+    }
+    undated: List[Dict[str, Any]] = []
+
+    for row in rows:
+        bucket = days.get(row["date"]) if row["date"] else None
+        if bucket is None:
+            undated.append(row)      # 没有日期的行不能凭空塞进某一天
+            continue
+        bucket["rows"].append(row)
+        bucket["payable"] += api.to_decimal(row["payable"]) or Decimal("0")
+        bucket["original"] += api.to_decimal(row["original"]) or Decimal("0")
+
+    for bucket in days.values():
+        # 同一天内金额大的排前面
+        bucket["rows"].sort(key=lambda r: api.to_decimal(r["payable"]) or Decimal("0"),
+                            reverse=True)
+
+    groups = [days[d] for d in all_days]
+    total_payable = sum((g["payable"] for g in groups), Decimal("0"))
+    total_original = sum((g["original"] for g in groups), Decimal("0"))
+    for row in undated:               # 无日期的行仍要计入合计，否则对不上账
+        total_payable += api.to_decimal(row["payable"]) or Decimal("0")
+        total_original += api.to_decimal(row["original"]) or Decimal("0")
+
+    max_payable = max((g["payable"] for g in groups), default=Decimal("0"))
+    currency = next((r["currency"] for r in rows if r["currency"]), None)
+
+    # 概览合计 —— 供明细页自对账。取不到就把错误带上，页面上标"无法核对"，
+    # 绝不能静默当作"一致"。
+    overview_total: Optional[str] = None
+    overview_error: Optional[Dict[str, Any]] = None
+    if with_overview:
+        try:
+            ov = api.get_overview(acct.ak, acct.sk, period)
+            ov_total, ov_cur, _n, _f = api.sum_spend(ov.get("List") or [])
+            if ov_total is not None:
+                overview_total = str(ov_total)
+            if currency is None:
+                currency = ov_cur
+        except api.BytePlusError as exc:
+            overview_error = exc.as_dict()
+
+    return {
+        "email": acct.email,
+        "uid": acct.uid,
+        "period": period,
+        "overview_total": overview_total,
+        "overview_error": overview_error,
+        "group_term": group_term,
+        "currency": currency,
+        "row_count": len(rows),
+        "reported_total": raw.get("_total"),
+        "truncated": bool(raw.get("_truncated")),
+        # 日维度: 每天一个条目，无消费的日子也在(值为 0)，否则柱状图日期会断
+        "days": [{"date": g["date"],
+                  "payable": str(g["payable"]),
+                  "original": str(g["original"]),
+                  "rows": g["rows"]} for g in groups],
+        "undated_rows": undated,
+        "max_payable": str(max_payable),
+        "is_current_month": is_current,
+        "through": through,
+        "total_payable": str(total_payable),
+        "total_original": str(total_original),
+    }

@@ -85,6 +85,15 @@
   footer{margin-top:14px;font-size:11px;color:var(--muted);line-height:1.75}
   code{background:var(--head);padding:1px 4px;border-radius:3px}
   .skel{padding:36px;text-align:center;color:var(--muted)}
+
+  /* 明细入口：真链接(同页签跳 /detail.html)，不是弹层 */
+  a.drill{
+    display:inline-block;text-decoration:none;white-space:nowrap;
+    border:1px solid var(--border);border-radius:6px;padding:4px 10px;
+    font-size:12px;font-weight:500;color:var(--accent);
+  }
+  a.drill:hover{background:var(--head)}
+
 </style>
 </head>
 <body>
@@ -117,10 +126,11 @@
           <th>已用（累计消费）</th>
           <th id="thPeriod">当期消费</th>
           <th>状态</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="rows">
-        <tr><td colspan="6" class="skel">加载中…</td></tr>
+        <tr><td colspan="7" class="skel">加载中…</td></tr>
       </tbody>
       <tfoot id="foot"></tfoot>
     </table>
@@ -130,55 +140,10 @@
 
 </div>
 
+
+<script src="/common.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-
-// ---- 认证 ----------------------------------------------------------------
-// 凭据只存在当前标签页的 sessionStorage 里，服务端不保存任何 session。
-// 关闭标签页即失效；每个请求自带 Authorization 头。
-const AUTH_KEY = 'bp_auth';
-
-function authHeader(){
-  const t = sessionStorage.getItem(AUTH_KEY);
-  return t ? {'Authorization': 'Basic ' + t} : {};
-}
-function toLogin(){
-  sessionStorage.removeItem(AUTH_KEY);
-  location.replace('/login.html');
-}
-
-function esc(s){
-  return String(s).replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-// 后端传字符串以保精度，这里只做展示层格式化
-function money(v, opts){
-  opts = opts || {};
-  if(v === null || v === undefined || v === '') return '<span class="dim">—</span>';
-  const n = Number(v);
-  if(!isFinite(n)) return esc(String(v));
-  const s = n.toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2});
-  return '<span class="num">' + (opts.atLeast ? '≥ ' : '') + s + '</span>';
-}
-function nonZero(v){ const n = Number(v); return isFinite(n) && n !== 0; }
-
-function defaultPeriod(){
-  const d = new Date();
-  return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0');
-}
-function fmtLocal(iso){
-  if(!iso) return '';
-  const d = new Date(iso);
-  return isNaN(d) ? iso : d.toLocaleString('zh-CN',{hour12:false});
-}
-function errText(e){
-  if(!e) return '';
-  const bits = [];
-  if(e.code) bits.push('['+esc(e.code)+']');
-  bits.push(esc(e.message || '未知错误'));
-  if(e.rate_limit) bits.push('(接口限流，稍后重试)');
-  return bits.join(' ');
-}
 
 function renderCards(d){
   const t = d.totals || {};
@@ -197,7 +162,7 @@ function renderCards(d){
 function renderRows(d){
   const tb = $('rows');
   if(!d.accounts.length){
-    tb.innerHTML = '<tr><td colspan="6" class="skel">cred.xlsx 里没有账号</td></tr>';
+    tb.innerHTML = '<tr><td colspan="7" class="skel">cred.xlsx 里没有账号</td></tr>';
     return;
   }
   let html = '';
@@ -234,7 +199,7 @@ function renderRows(d){
               : '')
           + '</td>';
 
-    // 当期消费
+    // 当期消费 —— 纯展示，不做跳转；下钻统一走行尾的「明细 ›」按钮
     if(a.selected_spend_error){
       html += '<td class="bad">查询失败</td>';
     }else{
@@ -245,11 +210,12 @@ function renderRows(d){
             + '</td>';
     }
 
-    const ok = a.ok && !a.granted_partial;
     html += '<td>' + (a.ok
         ? (a.granted_partial ? '<span class="pill warn">部分</span>'
                              : '<span class="pill">正常</span>')
-        : '<span class="pill bad">异常</span>') + '</td></tr>';
+        : '<span class="pill bad">异常</span>') + '</td>'
+      + '<td><a class="drill" href="' + detailHref(a.uid) + '">明细 ›</a></td>'
+      + '</tr>';
 
     const errs = [
       a.quota_error && '授信余额: ' + errText(a.quota_error),
@@ -257,10 +223,10 @@ function renderRows(d){
       a.current_spend_error && '当月消费: ' + errText(a.current_spend_error),
     ].filter(Boolean);
     if(errs.length){
-      html += '<tr class="errline"><td colspan="6">' + errs.join('<br>') + '</td></tr>';
+      html += '<tr class="errline"><td colspan="7">' + errs.join('<br>') + '</td></tr>';
     }
     if(a.notes && a.notes.length){
-      html += '<tr class="noteline"><td colspan="6">' + a.notes.map(esc).join('<br>') + '</td></tr>';
+      html += '<tr class="noteline"><td colspan="7">' + a.notes.map(esc).join('<br>') + '</td></tr>';
     }
   }
   tb.innerHTML = html;
@@ -271,7 +237,7 @@ function renderRows(d){
     + '<td>' + money(t.balance) + '</td>'
     + '<td>' + money(t.used) + '</td>'
     + '<td>' + money(t.selected_spend) + '</td>'
-    + '<td></td></tr>';
+    + '<td></td><td></td></tr>';
 }
 
 function renderNotes(d){
@@ -290,6 +256,43 @@ function renderNotes(d){
     + '<b>币种</b>：按需求统一按 ' + esc(d.currency) + ' 显示。<br>'
     + '<b>模式</b>：当月数据每次刷新都实时查 BytePlus API。账号来自 <code>cred.xlsx</code>，'
     + '改完点刷新即可生效（无需重启）。';
+}
+
+function applyData(data){
+  $('thPeriod').textContent = data.period + ' 消费';
+  renderCards(data);
+  renderRows(data);
+  renderNotes(data);
+}
+
+// ---- 返回总览时不重查 ------------------------------------------------------
+// 从明细页按返回键回来，本不该重新查一遍所有账号的接口。
+// 首选是浏览器 bfcache(整页从内存恢复)，服务端已把页面文档的 Cache-Control
+// 从 no-store 改成 no-cache 来保住它 —— 但 bfcache 还会被"附加了调试器"、
+// 内存压力、超时等因素取消，不能指望。所以这里再兜一层:
+// 离开前把总览数据存进 sessionStorage，返回导航时直接拿它渲染。
+const SNAP_KEY = 'bp_overview_snap';
+const SNAP_TTL_MS = 10 * 60 * 1000;   // 超过 10 分钟就宁可重查
+
+function saveSnapshot(data){
+  try{
+    sessionStorage.setItem(SNAP_KEY, JSON.stringify({at: Date.now(), data: data}));
+  }catch(e){ /* 配额满/隐私模式下失败无所谓，退化成重新查询 */ }
+}
+
+function loadSnapshot(){
+  try{
+    const s = JSON.parse(sessionStorage.getItem(SNAP_KEY) || 'null');
+    if(!s || !s.data || (Date.now() - s.at) > SNAP_TTL_MS) return null;
+    return s.data;
+  }catch(e){ return null; }
+}
+
+// 明细页链接。带上当前账期，这样详情页打开就是同一个月。
+function detailHref(uid){
+  const p = $('period').value || defaultPeriod();
+  return '/detail.html?uid=' + encodeURIComponent(uid)
+       + '&period=' + encodeURIComponent(p);
 }
 
 async function load(){
@@ -314,16 +317,15 @@ async function load(){
     const data = await res.json();
     if(!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
 
-    $('thPeriod').textContent = data.period + ' 消费';
-    renderCards(data);
-    renderRows(data);
-    renderNotes(data);
+    applyData(data);
+    saveSnapshot(data);
     $('stamp').textContent = '更新于 ' + fmtLocal(data.fetched_at)
                            + ' · 耗时 ' + data.elapsed_ms + ' ms';
   }catch(e){
     $('err').innerHTML = '<div class="errbox">加载失败: ' + esc(e.message) + '</div>';
-    $('rows').innerHTML = '<tr><td colspan="6" class="skel">—</td></tr>';
-    $('foot').innerHTML = ''; $('cards').innerHTML = '';
+    $('rows').innerHTML = '<tr><td colspan="7" class="skel">—</td></tr>';
+    $('foot').innerHTML = '';
+    $('cards').innerHTML = '';
     $('stamp').textContent = '';
   }finally{
     btn.disabled = false;
@@ -342,7 +344,45 @@ if(sessionStorage.getItem(AUTH_KEY)){
   btn.hidden = false;
   btn.addEventListener('click', toLogin);
 }
-load();
+
+// 什么时候算"从明细页回来"，可以直接用快照而不重查:
+//   1. 浏览器返回/前进键 -> navigation.type === 'back_forward'
+//   2. 明细页的「返回总览」链接 -> 那是**前进导航**(type = navigate)，
+//      拿不到上面那条路径，所以链接上带了 ?restore=1 作为显式标记。
+//      (本想用 document.referrer 判断来源，但响应头设了 Referrer-Policy:
+//       no-referrer，它恒为空，用不了。)
+// 其它情况一律照常查: 首次打开、刷新页面、手动输地址。
+const navEntry = performance.getEntriesByType('navigation')[0] || {};
+let wantRestore = navEntry.type === 'back_forward';
+try{
+  if(new URLSearchParams(location.search).get('restore') === '1') wantRestore = true;
+}catch(e){ /* 忽略 */ }
+
+// 标记用完就把地址栏洗干净，别让 ?restore=1 被收藏或分享出去
+if(location.search){
+  history.replaceState(null, '', location.pathname);
+}
+
+const snapshot = wantRestore ? loadSnapshot() : null;
+
+if(snapshot){
+  $('period').value = snapshot.period;
+  applyData(snapshot);
+  $('stamp').innerHTML = '更新于 ' + fmtLocal(snapshot.fetched_at)
+    + ' <span class="dim">· 返回时的数据，点刷新可更新</span>';
+}else{
+  load();
+}
+
+// bfcache 真正生效时脚本不会重跑，页面整个从内存恢复 —— 那样更好(连滚动位置
+// 都在)。这里只把时间戳标注一下，让人知道看到的不是刚查的。
+window.addEventListener('pageshow', ev => {
+  if(!ev.persisted) return;
+  const s = $('stamp').textContent;
+  if(s && s.indexOf('返回时的数据') === -1){
+    $('stamp').innerHTML = esc(s) + ' <span class="dim">· 返回时的数据，点刷新可更新</span>';
+  }
+});
 </script>
 </body>
 </html>

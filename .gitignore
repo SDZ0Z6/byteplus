@@ -7,7 +7,7 @@ config.json
 .env
 
 # 服务器 ssh 密钥
-byteplus-kuromi-portal.pem
+.pem/
 
 # 历史账期缓存(可安全删除，会自动重建)
 cache/
