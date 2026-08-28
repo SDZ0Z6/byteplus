@@ -18,7 +18,7 @@ BytePlus 账单/余额查询脚本
 凭据来源(优先级从高到低):
     1. 命令行 --ak / --sk
     2. 环境变量 BYTEPLUS_ACCESS_KEY / BYTEPLUS_SECRET_KEY
-    3. 脚本内 DEFAULT_AK / DEFAULT_SK
+    (脚本内不再保留默认密钥 —— 源码会进版本库)
 
 注意: 不同接口用不同 service —
     - 现金余额 QueryBalanceAcct      -> service=billing, version=2022-01-01
@@ -40,10 +40,13 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 # ---------------------------------------------------------------------------
-# 默认凭据(可被环境变量 / 命令行覆盖)。生产环境建议改用环境变量。
+# 这里**不要**填真实密钥。源码会进版本库，密钥跟着进去就等于公开了 ——
+# 之前正是因为这两行硬编码了一把在用的 AK/SK，GitHub 推送保护把整个仓库拦下,
+# 而且那把密钥在被拦之前就已经上传到对方服务器、只能作废重建。
+# 用 --ak/--sk 或环境变量 BYTEPLUS_ACCESS_KEY / BYTEPLUS_SECRET_KEY 传入。
 # ---------------------------------------------------------------------------
-DEFAULT_AK = "REMOVED-ROTATE-THIS-KEY"
-DEFAULT_SK = "REMOVED-ROTATE-THIS-KEY"
+DEFAULT_AK = ""
+DEFAULT_SK = ""
 
 # ---------------------------------------------------------------------------
 # 端点配置。BytePlus 国际站:
