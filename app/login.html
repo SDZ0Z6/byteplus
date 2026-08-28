@@ -39,16 +39,16 @@
   .card h1{margin:0 0 28px;font-size:26px;font-weight:700;text-align:center}
 
   .card label{display:block;font-size:12px;color:var(--text-2);margin-bottom:6px}
-  /* 无边框输入框。**必须给底色** —— 白底上去掉边框，输入框就彻底消失了，
-     没人看得出哪里能点。focus 时用 box-shadow 画一圈主色描边(不占布局，
-     所以不会像 border 那样让内容跳 1px)。 */
   .card input{
-    width:100%;font:inherit;font-size:14px;padding:11px 12px;margin-bottom:18px;
-    border:none;border-radius:8px;background:#f2f3f5;color:var(--text);
+    width:100%;font:inherit;font-size:14px;padding:10px 12px;margin-bottom:18px;
+    border:1px solid var(--border);border-radius:8px;background:var(--panel);
+    color:var(--text);
   }
-  .card input:hover{background:#edeff2}
+  /* focus 态必须写在这里且带 .card 前缀: app.css 的 input:focus 是 (0,1,1)，
+     和 .card input 的 (0,1,1) 打平，而本页的 <style> 在 app.css 之后 ——
+     平手时后者胜，边框会一直是灰的，focus 只剩一层很淡的光晕。 */
   .card input:focus{
-    outline:none;background:var(--panel);box-shadow:0 0 0 2px var(--blue);
+    outline:none;border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-1);
   }
   /* 外边距挪到容器上，眼睛按钮才能用 top/bottom:0 撑满输入框高度并居中 ——
      否则要按 padding 手算一个 top 值，改字号就歪。 */

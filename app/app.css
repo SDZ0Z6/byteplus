@@ -106,10 +106,8 @@ html[data-side="mini"] .side{width:var(--side-mini);flex-basis:var(--side-mini)}
  * (.nav-i.danger:hover 本身就是两个类，所以退出按钮一直是对的。)
  */
 .side .nav-i:hover{background:var(--blue-1);color:var(--blue)}
-/* 当前项和 hover 底色相同，靠左侧蓝条 + 加粗区分 —— 否则鼠标一移上去
-   就看不出自己在哪一页了。用 inset 阴影而不是 border-left，免得挤动内容。 */
-.nav-i.on{background:var(--blue-1);color:var(--blue);font-weight:600;
-          box-shadow:inset 3px 0 0 var(--blue)}
+/* 当前项和 hover 的底色/字色相同，只靠**加粗**区分(按要求不加左侧蓝条) */
+.nav-i.on{background:var(--blue-1);color:var(--blue);font-weight:600}
 .nav-i.danger:hover{background:var(--err-bg);color:var(--err)}
 
 /* 收起态: 只留图标。文字用 display:none 而不是 opacity —— 透明文字仍占位，
