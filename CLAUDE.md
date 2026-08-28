@@ -8,7 +8,9 @@
 
 多 BytePlus 账号的授信看板：**原授信额度 / 授信余额 / 已用 / 当期消费**，
 侧边栏「账单」或总览页点账号名，进 `/bill.html`：账号/账期筛选 + 授信卡 +
-日消费趋势图 + 扁平可排序明细表。界面固定 **Light Mode**，主色 `#1664ff`。
+日消费趋势图 + 扁平可排序明细表。`/accounts.html` 是账号管理：列出全部账号、
+**停用(软删除)**、**新增账号(先实调接口验证密钥才写 cred.xlsx)**。
+界面固定 **Light Mode**，主色 `#1664ff`。
 
 纯 Python 标准库 + `openpyxl`，**没有 Web 框架**。线上
 <https://kuromicloud.top/>（阿里云 ECS 马来西亚 + nginx + Let's Encrypt）。
@@ -68,7 +70,10 @@ python app/server.py --open     # 本机跑；无 config.json 时只监听回环
 3. **应用只监听 `127.0.0.1`**，公网唯一入口是 nginx。`--host` 传非回环地址时，
    若未配用户名密码会拒绝启动。
 4. **白名单路由 + 一个受控的静态目录**。页面和资源：`/`、`/login.html`、
-   `/bill.html`、`/common.js`、`/app.css`；图片走 `/static/<文件名>` —— 这是
+   `/bill.html`、`/accounts.html`、`/common.js`、`/app.css`；写操作是
+   `POST /api/account/add` 和 `POST /api/account/status`（**先读完请求体再校验
+   凭据** —— 反过来会让 401 响应和未读的请求体在 keep-alive 连接上错位）；
+   图片走 `/static/<文件名>` —— 这是
    **唯一按文件名取文件的入口**，防护全在 `_serve_static()`：文件名正则只放过
    一层普通文件名、**故意不做 unquote**（`%2e%2e` 因此进不来；先解码再校验等于
    自己开一个双重解码绕过口）、realpath 复核最终位置、扩展名白名单。
@@ -82,6 +87,19 @@ python app/server.py --open     # 本机跑；无 config.json 时只监听回环
 7. **`allow_reuse_address` 必须按平台取值** `(os.name != "nt")`。两个平台的
    `SO_REUSEADDR` 语义相反，写死任一个都会出问题（细节见 DEPLOY-NOTES）。
 8. **`app/` 不依赖 `script/`**。`script/byteplus_billing.py` 是独立的命令行工具。
+9. **写 `cred.xlsx` 只能走 `creds._write_workbook()`**，别在别处 `wb.save()`。
+   它负责：进程内写锁 → 备份到 `cache/` 并验证备份可解析 → 内存里拼完整字节
+   → 一次写入 + fsync → **回读解析验证** → 失败从备份回滚。
+   这个文件写坏等于所有账号一起丢，安全网不是可选的。
+10. **写入前必须清掉表格超链接**（`_clean_sheet`）。Excel 把邮箱自动变成
+   `mailto:` 链接，openpyxl 可写模式会把「有超链接、没有值」的单元格用超链接
+   目标当值创建出来 —— 在表里删过行之后就会凭空多出一行 `mailto:xxx`，
+   `load_accounts` 判定「有内容但缺 UID/AK/SK」→ 报错 → 写入回滚 → 此后再也
+   加不了账号。**踩到过**，删掉这段清理就会复现。
+11. **线上 systemd 只放开 `cache/` 和 `cred.xlsx` 两个可写路径**
+   (`ProtectSystem=strict` + `ReadWritePaths`)。所以：备份只能写 `cache/`、
+   写入只能原地覆盖(目录不可写，用不了临时文件+os.replace)。改动写入逻辑前
+   先看 `deploy/byteplus-billing.service`，别在本机能过、线上 EROFS。
 
 ## 已定下的决策 —— 别再提被否过的方案
 
@@ -97,6 +115,14 @@ python app/server.py --open     # 本机跑；无 config.json 时只监听回环
 | 明细表结构 | **扁平表 + 日期列 + 全列可排序**（按日期分组折叠那版已被替换） |
 | 账单页账号筛选 | **单账号下拉**，默认第一个（「全部账号」聚合要 ×N 打接口，限流风险，已否） |
 | 退出登录位置 | **侧边栏底部**（原来在工具条右侧） |
+| 停用状态存哪 | **`cred.xlsx` 的 `STATUS` 列**（提过单独存 json，被否 —— 账号数据只该有一份真相） |
+| cred.xlsx 谁是真相 | **服务器那份**。网页新增的账号只在服务器上，不能再从本地覆盖上去；要同步就从服务器往下拷 |
+| 新增账号是否验证 | **先实调 `GetQuotaAcctInfo` + 比对 `AccountID` 是否等于填入的 UID，不过就不保存** |
+| 管理页的「状态」列 | 只表示**启用/停用**，管理页完全不打 BytePlus 接口（提过顺带显示接口健康，被否 —— 会变得和总览一样慢） |
+| 管理页的 AK | **脱敏**，和其它页一致 |
+| 停用后的可见性 | **一律拒绝**：总览不算、下拉不列、`/api/detail` 带该 uid 直接 403 |
+| 停用的确认方式 | **两段式按钮**（点两次），不用 `window.confirm()` |
+| 账号的改 / 硬删 | **不做**。轮换密钥仍是手工编辑 xlsx；停用可撤回，够用了 |
 | 页面说明文字 | **不放**。总览页/账单页底部那两段口径说明已按要求删除，口径只写在 README，别再加回页面（表格下方的合计条 ✓/⚠ 不属于说明文字，是不变量 6，不能删） |
 | hover 反馈 | **一律主色高亮，不压暗**。注意 `button:hover:not(:disabled)` 特异度 (0,2,1) 会压过 `.someclass:hover` (0,2,0)，图标按钮的 hover 选择器必须再带一层类前缀 |
 | 明细表筛选 | 日期区间 + 产品 + 地域 + 关键字 + 只看有消费，全部**纯前端**筛选（不重新打接口）；产品/地域选项从当前数据动态生成 |

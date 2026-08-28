@@ -30,8 +30,11 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
-# ProtectSystem=strict 把整个文件系统挂成只读，只有这里列出的目录可写
-ReadWritePaths=/opt/byteplus-billing/cache
+# ProtectSystem=strict 把整个文件系统挂成只读，只有这里列出的路径可写。
+# cred.xlsx 必须在列: 账号管理页要往里写(新增/停用账号)。**只放这一个文件**，
+# 项目目录仍是只读的 —— 这个进程持有所有 SK，不该有能力改自己的代码。
+# 备份写在 cache/ 里也是因为这个: 项目目录不可写，没法在 cred.xlsx 旁边建文件。
+ReadWritePaths=/opt/byteplus-billing/cache /opt/byteplus-billing/cred.xlsx
 
 StandardOutput=journal
 StandardError=journal

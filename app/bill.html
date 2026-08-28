@@ -42,6 +42,7 @@ try{
       <span class="stamp" id="stamp"></span>
     </div>
 
+    <div id="hint"></div>
     <div id="err"></div>
 
     <div class="acctbar" id="acctbar" hidden></div>
@@ -396,6 +397,7 @@ async function load(){
   const btn = $('refresh');
   btn.disabled = true; btn.textContent = '查询中…';
   $('err').innerHTML = '';
+  $('hint').innerHTML = '';       // 换账号/换账期后旧提示就不再成立
   $('stamp').textContent = '正在查询 BytePlus API…';
 
   try{
@@ -501,14 +503,24 @@ $('reset').addEventListener('click', () => {
       $('acct').innerHTML = '<option>无账号</option>';
       return;
     }
-    // URL 里的 uid 不在表里(账号被删/手输错了)就退回第一个，别整页报错
+    // URL 里的 uid 不在列表里(被停用了、账号被删了、或手输错了)就退回第一个。
+    // 但**必须说一声** —— 静默换成另一个账号的账单，人会以为自己看的还是
+    // 原来那个账号，那比报错更糟。
+    const asked = UID;
+    const fellBack = asked && !ACCOUNTS.some(a => a.uid === asked);
     if(!ACCOUNTS.some(a => a.uid === UID)) UID = ACCOUNTS[0].uid;
     $('acct').innerHTML = ACCOUNTS.map(a =>
       '<option value="'+esc(a.uid)+'">'+esc(a.email || '(无邮箱)')
       + ' · '+esc(a.uid)+'</option>').join('');
     $('acct').value = UID;
     syncURL();
-    load();
+    await load();
+    if(fellBack){
+      const now = ACCOUNTS.find(a => a.uid === UID) || {};
+      $('hint').innerHTML = '<div class="notebox">账号 ' + esc(asked)
+        + ' 不在可用列表里（可能已在账号管理里停用），已切换到 '
+        + esc(now.email || UID) + '。</div>';
+    }
   }catch(e){
     $('err').innerHTML = '<div class="errbox">读不到账号列表: '+esc(e.message)+'</div>';
     $('acct').innerHTML = '<option>加载失败</option>';

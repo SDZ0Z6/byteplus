@@ -187,6 +187,33 @@ console 里看到 `file:///...` 开头的报错直接忽略。
 resize_window(width=1280, height=900)
 ```
 
+### 网页上新增/停用账号在线上失败、本机却正常
+
+`ProtectSystem=strict` 把整个文件系统挂成只读，只有 `ReadWritePaths` 列出的路径
+可写，而原先只列了 `cache/`。于是往 `cred.xlsx` 写入在本机（Windows，没有这层
+限制）一路顺畅，到了线上直接 EROFS。修法是把 `cred.xlsx` **这一个文件**加进
+`ReadWritePaths`，改完要 `systemctl daemon-reload`。
+
+**只放这一个文件、不放整个项目目录**：这个进程持有所有账号的 SK，不该有能力改
+自己的代码。代价是目录不可写 → 用不了「临时文件 + `os.replace`」原子替换，
+只能原地覆盖，所以 `creds._write_workbook()` 靠「先写一份已验证的备份到
+`cache/`」来兜底。
+
+### 一删过行，账号就再也加不进去了（openpyxl 超链接）
+
+症状：`add_account` / `set_enabled` 全部失败，报
+`写入后校验失败: cred.xlsx 第 N 行缺少 UID/AK/SK`，然后自动回滚。
+
+原因：Excel 会把邮箱自动变成 `mailto:` 超链接。openpyxl 在**可写模式**
+（`load_workbook()` 不带 `read_only=True`）下，会把「有超链接、但没有值」的
+单元格**用超链接目标当值创建出来**。在表格里删掉一行之后，被删行的超链接会
+留在原位变成孤立超链接，于是一保存就凭空多出一行 `mailto:xxx@yyy.com` ——
+它有内容却没有 UID/AK/SK，`load_accounts` 直接报错。
+
+只读模式看不到这个假行，所以「读得好好的、一写就坏」。修法在
+`creds._clean_sheet()`：写入前清掉全表超链接，并把最后一行真实数据之后的内容
+清空（判断真实数据看 UID/AK/SK，**不看 EMAIL** —— 假行恰好只有 EMAIL 有值）。
+
 ### 浏览器自动化里量到「侧边栏收起了但宽度不变」
 
 预览面板没显示时页面**不产帧**，于是 CSS transition 一启动就永远停在起始值 ——

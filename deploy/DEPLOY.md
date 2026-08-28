@@ -289,6 +289,19 @@ crontab -l | grep acme
 cd /opt/byteplus-billing && git pull && systemctl restart byteplus-billing
 ```
 
+> **这一次（加账号管理的那次更新）要多一步。** `deploy/byteplus-billing.service`
+> 改了 `ReadWritePaths`（把 `cred.xlsx` 加进可写路径，否则网页上新增/停用账号会
+> 因为 `ProtectSystem=strict` 直接 EROFS 失败）。所以这一次要：
+>
+> ```bash
+> cd /opt/byteplus-billing && git pull
+> cp deploy/byteplus-billing.service /etc/systemd/system/byteplus-billing.service
+> systemctl daemon-reload && systemctl restart byteplus-billing
+> ```
+>
+> 之后的常规更新照旧两条命令。验证一下确实能写：在账号管理页停用再启用一个账号，
+> 成功的话 `cache/` 里会多出 `cred-<时间戳>.xlsx` 备份。
+
 然后确认真的起来了（**别省这一步**）：
 
 ```bash

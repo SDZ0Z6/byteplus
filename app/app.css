@@ -169,6 +169,9 @@ button:hover:not(:disabled){background:var(--blue-hover)}
 button:disabled{opacity:.55;cursor:progress}
 button.ghost{background:var(--panel);border-color:var(--border);color:var(--text-2);font-weight:500}
 button.ghost:hover:not(:disabled){background:var(--head);border-color:#c9cdd4;color:var(--text)}
+/* 待确认的危险动作(账号管理里点一次「停用」后的二次确认态) */
+button.ghost.danger{color:var(--err);border-color:#f0c4be}
+button.ghost.danger:hover:not(:disabled){background:var(--err-bg);border-color:var(--err);color:var(--err)}
 
 .check{display:inline-flex;align-items:center;gap:6px;font-size:12px;
        color:var(--text-2);cursor:pointer;user-select:none}
@@ -330,7 +333,50 @@ a.acct:hover{color:var(--blue-hover)}
   padding:12px 16px;margin-top:14px;font-size:13px;box-shadow:var(--shadow);
 }
 
-/* ---- 10. 窄屏 ----------------------------------------------------------- */
+/* ---- 10. 提示条 / 停用行 ------------------------------------------------ */
+/* 不是错误、但必须让人看见的说明(比如"要看的账号已停用，已切到另一个") */
+.notebox{
+  background:var(--warn-bg);border:1px solid #f0d3a0;color:var(--warn);
+  border-radius:var(--radius);padding:10px 14px;margin-bottom:16px;font-size:12px;
+}
+/* 被软删除的账号行: 整行压灰，一眼能从启用的行里分出来 */
+tbody tr.off td{color:var(--muted)}
+tbody tr.off .acct{color:var(--muted)}
+
+/* ---- 11. 弹层(新增账号) ------------------------------------------------- */
+.modal{
+  position:fixed;inset:0;z-index:50;display:none;
+  align-items:center;justify-content:center;padding:24px;
+  background:rgba(29,33,41,.45);
+}
+.modal.open{display:flex}
+.modal-box{
+  background:var(--panel);border-radius:14px;width:100%;max-width:420px;
+  box-shadow:0 20px 60px rgba(29,33,41,.28);overflow:hidden;
+}
+.modal-head{
+  display:flex;align-items:center;gap:10px;padding:15px 18px;
+  border-bottom:1px solid var(--divider);
+}
+.modal-head h2{margin:0;font-size:16px;font-weight:650}
+.modal-x{
+  margin-left:auto;width:28px;height:28px;padding:0;border:none;background:none;
+  display:flex;align-items:center;justify-content:center;
+  color:var(--muted);cursor:pointer;border-radius:7px;font-size:20px;line-height:1;
+}
+/* 带 .modal-head 前缀: 见第 5 节 button:hover 那条注释 */
+.modal-head .modal-x:hover{color:var(--blue);background:var(--blue-1)}
+.modal-body{padding:16px 18px;display:flex;flex-direction:column;gap:13px}
+.field label{display:block;font-size:12px;color:var(--text-2);margin-bottom:5px}
+.field input{width:100%;font-size:14px;padding:9px 11px}
+.field .hint{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.6}
+.modal-foot{
+  display:flex;gap:10px;justify-content:flex-end;align-items:center;
+  padding:13px 18px;border-top:1px solid var(--divider);background:var(--head);
+}
+.modal-foot .spacer{flex:1}
+
+/* ---- 12. 窄屏 ----------------------------------------------------------- */
 @media (max-width:900px){
   .side{
     position:fixed;left:0;top:0;transform:translateX(-100%);

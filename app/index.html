@@ -95,7 +95,14 @@ function billHref(uid){
 function renderRows(d){
   const tb = $('rows');
   if(!d.accounts.length){
-    tb.innerHTML = '<tr><td colspan="6" class="skel">cred.xlsx 里没有账号</td></tr>';
+    // 「表里没账号」和「账号都被停用了」要分开说 —— 下一步动作完全不同:
+    // 一个是去填 cred.xlsx，一个是去账号管理页点启用
+    tb.innerHTML = '<tr><td colspan="6" class="skel">'
+      + (d.disabled_count
+          ? '全部 ' + d.disabled_count + ' 个账号都已停用 —— '
+            + '到 <a href="/accounts.html">账号管理</a> 里可以重新启用'
+          : 'cred.xlsx 里没有账号')
+      + '</td></tr>';
     return;
   }
   let html = '';
@@ -187,7 +194,7 @@ function applyData(data){
 // 从 no-store 改成 no-cache 来保住它 —— 但 bfcache 还会被"附加了调试器"、
 // 内存压力、超时等因素取消，不能指望。所以这里再兜一层:
 // 离开前把总览数据存进 sessionStorage，返回导航时直接拿它渲染。
-const SNAP_KEY = 'bp_overview_snap';
+// SNAP_KEY 在 common.js 里 —— 账号管理页改完账号后也要清它
 const SNAP_TTL_MS = 10 * 60 * 1000;   // 超过 10 分钟就宁可重查
 
 function saveSnapshot(data){
