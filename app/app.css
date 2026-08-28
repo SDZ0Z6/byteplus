@@ -97,8 +97,19 @@ html[data-side="mini"] .side{width:var(--side-mini);flex-basis:var(--side-mini)}
 }
 .nav-i svg{width:18px;height:18px;flex:0 0 18px;transition:transform .18s ease}
 .nav-i.flip svg{transform:rotate(180deg)}   /* 收起态: 箭头指向展开方向 */
-.nav-i:hover{background:var(--head);color:var(--text)}
-.nav-i.on{background:var(--blue-1);color:var(--blue);font-weight:600}
+/* hover 一律用主色高亮，不是压暗。
+ *
+ * **选择器必须带 .side 前缀**: 导航项里「收起」「退出登录」是 <button>，而
+ * 第 5 节的通用规则 button:hover:not(:disabled) 特异度是 (0,2,1)，比裸
+ * .nav-i:hover 的 (0,2,0) 高 —— 不加前缀的话这两个按钮 hover 会被刷成主色
+ * 实底，配上蓝色文字直接不可读。带上 .side 变成 (0,3,0) 才压得住。
+ * (.nav-i.danger:hover 本身就是两个类，所以退出按钮一直是对的。)
+ */
+.side .nav-i:hover{background:var(--blue-1);color:var(--blue)}
+/* 当前项和 hover 底色相同，靠左侧蓝条 + 加粗区分 —— 否则鼠标一移上去
+   就看不出自己在哪一页了。用 inset 阴影而不是 border-left，免得挤动内容。 */
+.nav-i.on{background:var(--blue-1);color:var(--blue);font-weight:600;
+          box-shadow:inset 3px 0 0 var(--blue)}
 .nav-i.danger:hover{background:var(--err-bg);color:var(--err)}
 
 /* 收起态: 只留图标。文字用 display:none 而不是 opacity —— 透明文字仍占位，
@@ -120,6 +131,8 @@ html[data-side="mini"] .nav-i{justify-content:center;padding:9px 0}
   border:1px solid var(--border);border-radius:8px;background:var(--panel);
   color:var(--text-2);cursor:pointer;
 }
+/* 同上: 不带 .topbar 前缀会被通用的 button:hover 刷成实底深蓝 */
+.topbar .hamb:hover{background:var(--blue-1);color:var(--blue);border-color:var(--blue-2)}
 .hamb svg{width:18px;height:18px}
 
 /* ---- 5. 工具条 / 表单控件 ----------------------------------------------- */
@@ -132,12 +145,16 @@ label{font-size:12px;color:var(--muted)}
 .spacer{flex:1}
 .stamp{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 
-input[type=month],input[type=text],select{
+input[type=month],input[type=date],input[type=text],select{
   font:inherit;font-size:13px;padding:6px 9px;color:var(--text);
   border:1px solid var(--border);border-radius:7px;background:var(--panel);
 }
 select{min-width:210px;max-width:100%}
-input[type=month]{font-variant-numeric:tabular-nums}
+/* 明细表的产品/地域筛选: 值可能很长(Elastic Compute Service)，但也不该
+   撑到 210px 把工具条挤成三行 */
+select.sm{min-width:auto;max-width:190px}
+input[type=month],input[type=date]{font-variant-numeric:tabular-nums}
+input[type=date]{min-width:138px}
 input:focus,select:focus{
   outline:none;border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-1);
 }
@@ -147,6 +164,9 @@ button{
   border:1px solid transparent;border-radius:7px;cursor:pointer;
   background:var(--blue);color:#fff;
 }
+/* 注意特异度 (0,2,1): 比 .someclass:hover 的 (0,2,0) 高。图标类按钮
+   (.nav-i / .hamb / .eye) 想自己定义 hover，选择器必须再带一个类做前缀，
+   否则会被这条刷成主色实底 —— 已经踩过一次。 */
 button:hover:not(:disabled){background:var(--blue-hover)}
 button:disabled{opacity:.55;cursor:progress}
 button.ghost{background:var(--panel);border-color:var(--border);color:var(--text-2);font-weight:500}
@@ -218,8 +238,9 @@ th.sort[aria-sort=descending] .ind::after{content:"\2193"}
 
 .num{font-variant-numeric:tabular-nums}
 .acct{font-weight:550}
+/* 账号名是下钻入口。hover 不加下划线，只加深主色 */
 a.acct{color:var(--blue);text-decoration:none}
-a.acct:hover{text-decoration:underline}
+a.acct:hover{color:var(--blue-hover)}
 .meta{font-size:11px;color:var(--muted);font-weight:400}
 .dim{color:var(--muted)}
 .bad{color:var(--err)}
@@ -304,13 +325,12 @@ a.acct:hover{text-decoration:underline}
 .xaxis span{flex:1;text-align:center;font-size:10px;color:var(--muted);
             font-variant-numeric:tabular-nums;min-width:0;overflow:hidden}
 
-/* ---- 9. 合计条 / 页脚 --------------------------------------------------- */
+/* ---- 9. 合计条 --------------------------------------------------------- */
 .totals{
   display:flex;gap:16px;flex-wrap:wrap;align-items:center;
   background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
   padding:12px 16px;margin-top:14px;font-size:13px;box-shadow:var(--shadow);
 }
-footer{margin-top:14px;font-size:11px;color:var(--muted);line-height:1.8}
 
 /* ---- 10. 窄屏 ----------------------------------------------------------- */
 @media (max-width:900px){

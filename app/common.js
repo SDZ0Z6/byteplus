@@ -142,9 +142,11 @@ function initShell(active){
   const side = document.getElementById('side');
   if(!side) return;
 
+  // title 不只是悬浮提示: 收起态下 <span> 是 display:none，隐藏文字不计入
+  // 无障碍名，只剩图标的按钮就变成"没有名字的按钮"了。title 兜住这个。
   const item = (key, href, text, icon) =>
-      '<a class="nav-i' + (key === active ? ' on' : '') + '" href="' + href + '">'
-    + icon + '<span>' + text + '</span></a>';
+      '<a class="nav-i' + (key === active ? ' on' : '') + '" href="' + href
+    + '" title="' + text + '">' + icon + '<span>' + text + '</span></a>';
 
   // 回总览时带 ?restore=1: 总览页据此用 sessionStorage 里的快照渲染，
   // 而不是把所有账号的接口重查一遍(它自己那套返回逻辑就认这个标记)。
@@ -165,7 +167,7 @@ function initShell(active){
     +     ICON.chevron + '<span>收起</span></button>'
     // 只有确实带着凭据时才给退出按钮(未启用验证时没有可退的东西)
     +   (sessionStorage.getItem(AUTH_KEY)
-        ? '<button class="nav-i danger" id="logout" type="button">'
+        ? '<button class="nav-i danger" id="logout" type="button" title="退出登录">'
           + ICON.logout + '<span>退出登录</span></button>' : '')
     + '</div>';
 

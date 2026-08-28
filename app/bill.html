@@ -50,12 +50,23 @@ try{
     <div id="chart"></div>
 
     <div class="toolbar">
+      <!-- 一个「日期」标签管两个框，所以结束日期必须自己带 aria-label，
+           否则读屏软件念到它时是个没有名字的输入框 -->
+      <label for="from">日期</label>
+      <input type="date" id="from" aria-label="开始日期" title="开始日期">
+      <span class="dim">–</span>
+      <input type="date" id="to" aria-label="结束日期" title="结束日期">
+      <label for="prod">产品</label>
+      <select class="sm" id="prod"><option value="">全部产品</option></select>
+      <label for="region">地域</label>
+      <select class="sm" id="region"><option value="">全部地域</option></select>
       <span class="search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
              stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 4.5 4.5"/></svg>
-        <input type="text" id="q" placeholder="搜产品 / 实例 / 地域 / 项目">
+        <input type="text" id="q" placeholder="搜实例 / 规格 / 项目">
       </span>
       <label class="check"><input type="checkbox" id="onlySpend">只看有消费的行</label>
+      <button class="ghost" id="reset">重置筛选</button>
       <span class="spacer"></span>
       <span class="stamp" id="count"></span>
     </div>
@@ -71,7 +82,6 @@ try{
     </div>
 
     <div class="totals" id="totals"></div>
-    <footer id="notes"></footer>
 
   </div></main>
 </div>
@@ -239,9 +249,46 @@ function renderHead(){
     + esc(c.t) + '<span class="ind"></span></th>').join('') + '</tr>';
 }
 
+// 产品/地域下拉的选项来自**当前这份数据**: 不同账号、不同账期用到的产品和
+// 地域完全不同，写死一份清单必然过期。换数据后原选中值若还在就保留，否则回"全部"。
+function fillFacets(){
+  const distinct = get => [...new Set(ROWS.map(get).filter(Boolean))]
+                            .sort((a, b) => a.localeCompare(b, 'zh'));
+  const fill = (id, values, allLabel) => {
+    const sel = $(id), prev = sel.value;
+    sel.innerHTML = '<option value="">' + allLabel + '</option>'
+      + values.map(v => '<option value="'+esc(v)+'">'+esc(v)+'</option>').join('');
+    sel.value = values.indexOf(prev) !== -1 ? prev : '';
+  };
+  fill('prod', distinct(r => r.product), '全部产品');
+  fill('region', distinct(r => r.region), '全部地域');
+}
+
+// 日期筛选框限定在本账期内。换账期之后落在区间外的旧值**必须清掉** ——
+// 留着就是一张空表，而且看不出为什么空。
+function syncDateBounds(d){
+  const days = d.days || [];
+  const lo = days.length ? days[0].date : d.period + '-01';
+  const hi = days.length ? days[days.length - 1].date : d.through;
+  ['from', 'to'].forEach(id => {
+    const el = $(id);
+    el.min = lo; el.max = hi;
+    if(el.value && (el.value < lo || el.value > hi)) el.value = '';
+  });
+}
+
 function filtered(){
   const kw = ($('q').value || '').trim().toLowerCase();
+  const from = $('from').value, to = $('to').value;
+  const prod = $('prod').value, region = $('region').value;
   let rows = ROWS;
+  // 日期是 ISO(YYYY-MM-DD)，字符串比较即等于时间比较。
+  // 无日期的行放不进任何区间，设了区间就会被排除 —— 计数行会显示"筛选出 N 条"，
+  // 不会静默丢数。
+  if(from) rows = rows.filter(r => r.date && r.date >= from);
+  if(to)   rows = rows.filter(r => r.date && r.date <= to);
+  if(prod) rows = rows.filter(r => r.product === prod);
+  if(region) rows = rows.filter(r => r.region === region);
   if($('onlySpend').checked) rows = rows.filter(r => Number(r.payable) !== 0);
   if(kw){
     rows = rows.filter(r => SEARCH_KEYS.some(k =>
@@ -258,8 +305,8 @@ function renderRows(){
   const size = pageSize();
   const pages = Math.max(1, Math.ceil(rows.length / (size === Infinity ? Math.max(1, rows.length) : size)));
   if(page > pages) page = pages;
-  const from = size === Infinity ? 0 : (page - 1) * size;
-  const slice = size === Infinity ? rows : rows.slice(from, from + size);
+  const start = size === Infinity ? 0 : (page - 1) * size;
+  const slice = size === Infinity ? rows : rows.slice(start, start + size);
 
   // 空表的两种原因要分开说: 该账期本来就没消费，和"筛掉了所有行"，
   // 处理动作完全不同(一个是没数据，一个是清一下搜索框)。
@@ -278,7 +325,10 @@ function renderRows(){
   $('count').innerHTML = '共 '+ROWS.length+' 条'
     + (isFiltered ? ' · 筛选出 '+rows.length+' 条' : '')
     + (size !== Infinity && rows.length > size
-        ? ' · 本页 '+(from+1)+'–'+(from+slice.length) : '');
+        ? ' · 本页 '+(start+1)+'–'+(start+slice.length) : '')
+    // 说清楚筛选的作用范围: 图和页脚合计都是整月全量，不跟着筛选变。
+    // 去掉页脚那段说明之后，这是唯一还会提醒这件事的地方。
+    + (isFiltered ? ' · <span class="dim">图表与合计仍为整月</span>' : '');
 
   const pager = $('pager');
   pager.hidden = false;
@@ -332,27 +382,6 @@ function renderTotals(d){
           + ' 条无日期（已计入合计，日期列显示"无日期"）</span>' : '');
 }
 
-function renderNotes(){
-  $('notes').innerHTML =
-      '<b>口径</b>：应付金额取 <code>PosttaxAmount</code>（含税应付，已核对 = 已付 + 未付），'
-    + '与总览页「当期消费」同一字段，所以两处必然相等。<br>'
-    + '<b>抹零</b>：原始金额与应付金额的差额。抹零常在 1e-5 量级，所以这两列最多显示'
-    + ' 6 位小数 —— 只显示 2 位会变成 0.00，正好把要解释的信息抹掉。'
-    + '某行应付为 0 但原始不为 0，说明整笔被抹零了，不是漏算。<br>'
-    + '<b>粒度</b>：<code>GroupTerm=0 + GroupPeriod=1</code>，每个资源每天一行'
-    + '（按计费项拆分，同一资源同一天可能出现多行）。<br>'
-    + '<b>这张图回答的是「哪天产生了账」，不是「哪天用了多少」</b>：包月/预付资源'
-    + '会把整笔费用记在<b>购买或续费当天</b>，不是均摊到每天，所以某一天可能明显偏高。'
-    + '看「计费方式」列即可分辨 —— <code>Pay-as-you-go</code> 是当天真实用量，'
-    + '<code>Yearly/monthly</code> 是一次性入账。<br>'
-    + '<b>范围</b>：柱状图和页脚合计始终是整月全量；搜索、分页、"只看有消费的行"'
-    + '只影响表格显示，不改变合计。<br>'
-    + '<b>排序</b>：金额列按数值排；单价和用量也按数值排，但<b>单位不同不能跨单位比较</b>'
-    + '（Second / Month / GB…），所以降序时 <code>86400 Second</code> 会排在 '
-    + '<code>1 Month</code> 前面。空值恒定排在末尾，不随升降翻转 —— 把"没有单价"'
-    + '当 0 会让它插进最便宜那一档，看着像算错了。';
-}
-
 // ---- 取数 ----------------------------------------------------------------
 async function fetchAccounts(){
   const res = await fetch(apiURL('/api/account-list'),
@@ -381,6 +410,8 @@ async function load(){
     ROWS = (d.days || []).reduce((acc, g) => acc.concat(g.rows), [])
              .concat(d.undated_rows || []);
     page = 1;
+    syncDateBounds(d);   // 必须在 renderRows 之前: 它会清掉越界的旧日期值
+    fillFacets();
 
     document.title = '账单 · ' + (d.email || d.uid);
     renderAccount(d);
@@ -388,7 +419,6 @@ async function load(){
     renderHead();
     renderRows();
     renderTotals(d);
-    renderNotes();
     $('stamp').textContent = '共 '+d.row_count+' 条 · 更新于 '
       + fmtLocal(d.fetched_at) + ' · 耗时 '+d.elapsed_ms+' ms';
   }catch(e){
@@ -445,6 +475,19 @@ $('q').addEventListener('input', () => {
   kwTimer = setTimeout(() => { page = 1; renderRows(); }, 120);
 });
 $('onlySpend').addEventListener('change', () => { page = 1; renderRows(); });
+
+// 日期区间 / 产品 / 地域: 纯前端筛选，不重新打接口
+['from', 'to', 'prod', 'region'].forEach(id =>
+  $(id).addEventListener('change', () => { page = 1; renderRows(); }));
+
+// 一次清掉全部筛选。筛选项多了之后，"表是空的但想不起来自己勾了什么"
+// 是最容易卡住人的状态，给个一键出口。
+$('reset').addEventListener('click', () => {
+  ['from', 'to', 'prod', 'region', 'q'].forEach(id => $(id).value = '');
+  $('onlySpend').checked = false;
+  page = 1;
+  renderRows();
+});
 
 // ---- 启动 ----------------------------------------------------------------
 (async function boot(){

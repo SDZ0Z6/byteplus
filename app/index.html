@@ -62,8 +62,6 @@ try{
       </table>
     </div></div>
 
-    <footer id="notes"></footer>
-
   </div></main>
 </div>
 
@@ -177,29 +175,10 @@ function renderRows(d){
     + '<td></td></tr>';
 }
 
-function renderNotes(d){
-  const backs = d.accounts.map(a => a.scanned_back_to).filter(Boolean).sort();
-  $('notes').innerHTML =
-      '<b>原授信额度是推算值</b>：BytePlus 接口没有这个字段，用 '
-    + '<code>授信余额 + 累计消费</code> 算出来（已用真实数据核对：'
-    + '188.71 + 11.29 = 200.00、999.92 + 0.08 = 1000.00）。'
-    + '授信余额是按消费扣减的，所以「已用」就等于累计消费。<br>'
-    + '<b>精度</b>：额度扣减比账单接口略有延迟，所以推算出的原授信额度可能在几分钱范围内波动'
-    + '（实测同一账号在 1538.00 / 1538.02 之间跳）。真实授信通常是整数，可据此判断。<br>'
-    + '<b>累计消费的范围</b>：从当月往前逐月累加，连续无消费的月份达到设定数量即停'
-    + (backs.length ? '（本次最早扫到 ' + esc(backs[0]) + '）' : '')
-    + '。已结账的月份会永久缓存，所以每次刷新只重新查当月。'
-    + '若某个账期取数失败，该账号的原授信额度会标成 <code>≥</code> 下限值，不会把失败当成 0。<br>'
-    + '<b>币种</b>：按需求统一按 ' + esc(d.currency) + ' 显示。<br>'
-    + '<b>模式</b>：当月数据每次刷新都实时查 BytePlus API。账号来自 <code>cred.xlsx</code>，'
-    + '改完点刷新即可生效（无需重启）。点账号名可看该账期的<b>账单明细</b>。';
-}
-
 function applyData(data){
   $('thPeriod').textContent = data.period + ' 消费';
   renderCards(data);
   renderRows(data);
-  renderNotes(data);
 }
 
 // ---- 返回总览时不重查 ------------------------------------------------------

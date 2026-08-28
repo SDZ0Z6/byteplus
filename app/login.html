@@ -39,19 +39,31 @@
   .card h1{margin:0 0 28px;font-size:26px;font-weight:700;text-align:center}
 
   .card label{display:block;font-size:12px;color:var(--text-2);margin-bottom:6px}
+  /* 无边框输入框。**必须给底色** —— 白底上去掉边框，输入框就彻底消失了，
+     没人看得出哪里能点。focus 时用 box-shadow 画一圈主色描边(不占布局，
+     所以不会像 border 那样让内容跳 1px)。 */
   .card input{
-    width:100%;font:inherit;font-size:14px;padding:10px 12px;margin-bottom:18px;
-    border:1px solid var(--border);border-radius:8px;background:var(--panel);
-    color:var(--text);
+    width:100%;font:inherit;font-size:14px;padding:11px 12px;margin-bottom:18px;
+    border:none;border-radius:8px;background:#f2f3f5;color:var(--text);
   }
-  .pw{position:relative}
-  .pw input{padding-right:42px}
+  .card input:hover{background:#edeff2}
+  .card input:focus{
+    outline:none;background:var(--panel);box-shadow:0 0 0 2px var(--blue);
+  }
+  /* 外边距挪到容器上，眼睛按钮才能用 top/bottom:0 撑满输入框高度并居中 ——
+     否则要按 padding 手算一个 top 值，改字号就歪。 */
+  .pw{position:relative;margin-bottom:18px}
+  .pw input{margin-bottom:0;padding-right:44px}
   .eye{
-    position:absolute;top:9px;right:8px;width:28px;height:28px;padding:0;
+    position:absolute;top:0;bottom:0;right:6px;width:32px;padding:0;
     display:flex;align-items:center;justify-content:center;
-    background:none;border:none;color:var(--muted);cursor:pointer;border-radius:6px;
+    background:none;border:none;color:var(--muted);cursor:pointer;
   }
-  .eye:hover{background:var(--head);color:var(--text-2)}
+  /* 高亮，不压暗。带 .pw 前缀是必需的 —— app.css 里通用的
+     button:hover:not(:disabled) 特异度 (0,2,1) 比 .eye:hover 的 (0,2,0) 高，
+     不加前缀这个图标按钮 hover 会顶着一块深蓝实底。 */
+  .pw .eye:hover{color:var(--blue);background:none}
+  .pw .eye:active{color:var(--blue-hover)}
   .eye svg{width:17px;height:17px}
 
   .card button[type=submit]{
@@ -63,7 +75,6 @@
     border-radius:8px;padding:9px 12px;font-size:12px;margin-bottom:18px;
   }
   .msg.show{display:block}
-  .tip{margin-top:22px;font-size:11px;color:var(--muted);text-align:center;line-height:1.7}
 
   /* 窄屏: 隐藏视觉块，品牌改到表单顶部 —— 那张拼图在手机上占满整屏
      却还要往下滚才能看见输入框，登录页最该做的是让人立刻能输入。 */
@@ -116,8 +127,6 @@
       </div>
 
       <button type="submit" id="btn">登录</button>
-
-      <div class="tip">凭据只保存在当前标签页，关闭标签页即自动登出。</div>
     </form>
   </section>
 
