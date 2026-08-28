@@ -17,16 +17,11 @@
 | 续期 | acme.sh 自带 cron，每天 4 次（02:58 / 08:58 / 14:58 / 20:58） |
 | 应用 | systemd `byteplus-billing`，`User=byteplus`，绑 **`127.0.0.1:8787`** |
 | 安全组 | 开 80 / 443；**8787 已关**（应用只监听回环，外部不可达） |
+| 代码管理 | git，私有仓库 `github.com/SDZ0Z6/byteplus`，分支 **`main`** |
+| 部署方式 | 服务器 `git pull` + 重启（不再用 scp） |
 
-## 两个踩过的坑
-
-**1. `certbot` 在这个系统上装不了。** Alibaba Cloud Linux 4 只启用 `alinux4-os/plus/updates`
-三个仓库，里面没有 certbot，也没有 `epel-release` 可装。硬要用就得塞进 venv
-（系统 Python 是 dnf 管的，直接 pip 装会冲突）。**改用 acme.sh** —— 纯 shell、零依赖、
-自带续期 cron、不碰系统 Python。
-
-**2. dnf 是严格模式。** 一条 `dnf install -y nginx certbot python3-certbot-nginx`
-里只要有一个包没匹配上，**整个事务回滚**，nginx 也不会装上。所以要分开装。
+> 踩过的坑、事故记录、已知遗留项都在 **[DEPLOY-NOTES.md](DEPLOY-NOTES.md)**。
+> 出问题先翻那份，很多现象那里已经有解释。
 
 ---
 
@@ -34,8 +29,11 @@
 
 ### 1. 装依赖
 
+`dnf` 是严格模式 —— 一条命令里只要有一个包没匹配上就**整个事务回滚**，
+其它包也不会装。所以别把没把握的包混进来。
+
 ```bash
-sudo dnf install -y python3 python3-pip nginx
+sudo dnf install -y python3 python3-pip nginx git
 ```
 
 ```bash
@@ -51,14 +49,32 @@ sudo useradd -r -s /sbin/nologin byteplus
 sudo mkdir -p /opt/byteplus-billing
 ```
 
-### 3. 上传代码
+### 3. 拉取代码
 
-在**本地**项目目录执行。**逐项列出，不要用 `scp -r .`** —— 那会把 SSH 私钥
-（`byteplus-kuromi-portal.pem`）一起传上去。
+目录里有 `cred.xlsx` / `config.json` / `cache/` 这些**不能被覆盖**的文件，而
+`git clone` 要求目标目录为空 —— 所以要**原地 init**，不能 clone：
 
 ```bash
-scp -r app deploy README.md root@43.107.53.16:/opt/byteplus-billing/
-scp cred.xlsx config.example.json root@43.107.53.16:/opt/byteplus-billing/
+cd /opt/byteplus-billing
+git config --global --add safe.directory /opt/byteplus-billing
+git init
+git remote add origin https://github.com/SDZ0Z6/byteplus.git
+git fetch origin
+git checkout -f -b main origin/main
+```
+
+`checkout -f` 只覆盖仓库里存在的文件（也就是代码）。`cred.xlsx` 那几个不在
+仓库里、又被 `.gitignore` 覆盖，会原封不动留着。
+
+> **`safe.directory` 那行别省。** 目录属主是 `byteplus` 而你用 root 跑 git，
+> 新版 git 会判定 `dubious ownership` 直接拒绝执行。
+
+`cred.xlsx` 不在仓库里（也绝不该在），需要单独传，且**必须带上权限修正** ——
+scp 到 root 会让它变成 `644 root:root`：
+
+```bash
+scp cred.xlsx root@43.107.53.16:/opt/byteplus-billing/ && \
+ssh root@43.107.53.16 "chown byteplus:byteplus /opt/byteplus-billing/cred.xlsx && chmod 600 /opt/byteplus-billing/cred.xlsx"
 ```
 
 ### 4. 写配置
@@ -265,21 +281,50 @@ crontab -l | grep acme
 
 ## 日常维护
 
-**加/改 BytePlus 账号** —— 改 `cred.xlsx` 重新上传即可，**不用重启**（每次请求都会重读）：
+### 更新代码
+
+本地 `git push` 之后，服务器上：
 
 ```bash
-scp cred.xlsx root@43.107.53.16:/opt/byteplus-billing/
+cd /opt/byteplus-billing && git pull && systemctl restart byteplus-billing
+```
+
+然后确认真的起来了（**别省这一步**）：
+
+```bash
+systemctl is-active byteplus-billing && curl -sf -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/api/health
+```
+
+期望 `active` 和 `200`。有过一次「命令没报错、服务其实在崩溃循环」的经历
+（见 [DEPLOY-NOTES](DEPLOY-NOTES.md) 的端口复用那条），多这一行能立刻发现。
+
+回滚：`git log --oneline -5` 找到上一个提交，然后
+
+```bash
+git reset --hard <sha> && systemctl restart byteplus-billing
+```
+
+> **为什么不用 `git reset --hard origin/main` 做常规部署**：`git pull` 在服务器上
+> 有人手动改过文件时会**报错停下**，而 `reset --hard` 会默默丢弃。前者更适合
+> 人工执行 —— 它会告诉你「这里有你没料到的改动」。
+>
+> **别只 pull 不 restart**：HTML/JS 每次请求现读磁盘、立刻生效，Python 要重启
+> 才生效，中间会是「新前端 + 旧后端」。
+
+### 加/改 BytePlus 账号
+
+改 `cred.xlsx` 重新上传即可，**不用重启**（每次请求都会重读）。
+**权限修正必须跟上** —— scp 到 root 会把它重置成 `644 root:root`：
+
+```bash
+scp cred.xlsx root@43.107.53.16:/opt/byteplus-billing/ && \
 ssh root@43.107.53.16 "chown byteplus:byteplus /opt/byteplus-billing/cred.xlsx && chmod 600 /opt/byteplus-billing/cred.xlsx"
 ```
 
-**改登录密码**：改 `config.json` 后 `sudo systemctl restart byteplus-billing`。
+### 改登录密码
 
-**更新代码**：
-
-```bash
-scp -r app root@43.107.53.16:/opt/byteplus-billing/
-ssh root@43.107.53.16 "chown -R byteplus:byteplus /opt/byteplus-billing/app && systemctl restart byteplus-billing"
-```
+改 `config.json` 后 `sudo systemctl restart byteplus-billing`。
+`config.json` 不在仓库里，`git pull` 不会碰它。
 
 **缓存疑似算错**（删掉重启会重新扫）：
 
@@ -297,27 +342,13 @@ sudo journalctl -u byteplus-billing | grep 认证失败      # 撞库痕迹
 
 ---
 
-## 已知遗留项
+## 踩过的坑与遗留项
 
-**1. 443 只监听 IPv4。** 现状 `0.0.0.0:443`，而 80 还额外监听了 `[::]:80`。
-域名目前没有 AAAA 记录，所以没影响。但**如果以后加了 AAAA 记录**，IPv6 客户端
-会走 80 拿到 301、再连 443 时失败。要支持就补上：
+已移到 **[DEPLOY-NOTES.md](DEPLOY-NOTES.md)**，包含：
 
-```nginx
-listen [::]:443 ssl;
-```
-
-**2. 证书在公开 CT 日志里。** Let's Encrypt 签发的证书会进 Certificate Transparency
-公开日志，扫描器盯着它 —— 域名上线后几分钟内就会有陌生 IP 来摸（已观测到）。
-认证能挡住，属正常现象，不必紧张；但这也意味着**登录密码强度和失败锁定是真正的防线**。
-
-**3. 想彻底关掉 80**：改用 DNS-01 校验（阿里云 DNS 有 API）：
-
-```bash
-export Ali_Key="你的AccessKeyId"
-export Ali_Secret="你的AccessKeySecret"
-~/.acme.sh/acme.sh --issue --dns dns_ali -d kuromicloud.top --server letsencrypt
-```
-
-这样续期不需要 80 端口，安全组可以只留 443（甚至只对自己的 IP 开放）。
-代价是要给 acme.sh 一对阿里云 AK/SK。
+- 待办事项（**有一项是密钥轮换，未完成**）
+- 环境相关：`certbot` 在这个系统装不了、`dnf` 严格模式、git 的 `safe.directory`
+- 运行时：Windows/Linux 的 `SO_REUSEADDR` 语义差异导致重启失败
+- 权限：`cred.xlsx` 每次 scp 都会被重置成 644
+- 遗留项：443 只监听 IPv4、证书进 CT 日志被扫、如何彻底关掉 80 端口
+- 排查经验：几个「看着像 bug 其实不是」的现象

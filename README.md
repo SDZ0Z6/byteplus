@@ -8,7 +8,23 @@
 ## 线上地址
 
 <https://kuromicloud.top/> —— 阿里云 ECS（马来西亚·吉隆坡）+ nginx + Let's Encrypt。
-部署与运维见 [deploy/DEPLOY.md](deploy/DEPLOY.md)。
+部署步骤见 [deploy/DEPLOY.md](deploy/DEPLOY.md)，踩坑与遗留项见
+[deploy/DEPLOY-NOTES.md](deploy/DEPLOY-NOTES.md)。
+
+代码托管在私有仓库 `github.com/SDZ0Z6/byteplus`，分支 `main`。发布流程：
+
+```bash
+# 本地
+git push
+
+# 服务器
+cd /opt/byteplus-billing && git pull && systemctl restart byteplus-billing
+systemctl is-active byteplus-billing && curl -sf -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/api/health
+```
+
+`cred.xlsx` / `config.json` / `cache/` 都在 `.gitignore` 里 —— 它们只存在于服务器上，
+`git pull` 永远不会碰。这也是本地和服务器不会冲突的原因：服务器只做 checkout，
+从不编辑代码，两边真正不同的东西 git 根本不管。
 
 架构：
 
@@ -298,8 +314,12 @@ BytePlus 的 OpenAPI 限流很紧 —— 实测并发 12 打过去，24 个请�
   `ProtectSystem=strict` / `ProtectHome` / `NoNewPrivileges`，只有 `cache/` 可写
 * `cred.xlsx`、`config.json`、`cache/`、`*.pem` 都在 `.gitignore` 里
 
-⚠ **上传代码时不要用 `scp -r .`** —— SSH 私钥（`byteplus-kuromi-portal.pem`）就在项目
-根目录，`.gitignore` 只管 git、不管 scp。按 [deploy/DEPLOY.md](deploy/DEPLOY.md)
+⚠ **别在源码里写真实密钥。** 首次推 GitHub 时就因为 `script/byteplus_billing.py`
+里硬编码了一对在用的 AK/SK 被推送保护拦下，且密钥在被拦前已上传到对方服务器、
+只能作废重建。经过见 [DEPLOY-NOTES](deploy/DEPLOY-NOTES.md)。
+
+⚠ **手工传文件时不要用 `scp -r .`** —— SSH 私钥在 `.pem/` 目录下，
+`.gitignore` 只管 git、不管 scp。按 [deploy/DEPLOY.md](deploy/DEPLOY.md)
 第 3 步逐项列出要传的东西。
 
 按需求，`cred.xlsx` 和 `config.json` 都是**明文不加密**的。所以文件权限是关键防线：
@@ -335,6 +355,7 @@ Byteplus/
 │   └── common.js               两个页面共用的工具函数
 ├── deploy/
 │   ├── DEPLOY.md               阿里云 ECS 部署步骤
+│   ├── DEPLOY-NOTES.md         踩坑记录 / 待办 / 遗留项 / 排查经验
 │   └── byteplus-billing.service systemd 单元文件
 └── script/
     └── byteplus_billing.py     原有命令行工具(独立，本系统不依赖它)
