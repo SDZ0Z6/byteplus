@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>账号管理 · BytePlus Kuromi 平台</title>
+<link rel="icon" href="/static/Kuromi_Icon_50px_20260828.png">
+<link rel="stylesheet" href="/app.css">
+<!-- 侧边栏收起状态必须在首帧之前定好，否则切页时侧边栏会先画成展开态再抽回去 -->
+<script>
+try{
+  document.documentElement.dataset.side =
+    (localStorage.getItem('bp_side') === 'mini') ? 'mini' : 'full';
+}catch(e){ document.documentElement.dataset.side = 'full'; }
+</script>
+<style>
+  #tbl{min-width:720px}
+  /* 弹层里的报错框: 复用 .errbox 的配色，但边距按弹层来 */
+  #formErr{display:none;margin:0 0 4px;padding:9px 12px;font-size:12px}
+  #formErr.show{display:block}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="side" id="side"></aside>
+  <div class="backdrop" id="backdrop"></div>
+
+  <main class="main"><div class="wrap">
+
+    <div class="topbar">
+      <button class="hamb" id="hamb" type="button" aria-label="菜单"></button>
+      <h1>账号管理</h1>
+      <span class="sub">账号来自 <code>cred.xlsx</code>；停用后总览和账单都看不到它</span>
+      <span class="spacer"></span>
+      <button id="addBtn">+ 新增账号</button>
+    </div>
+
+    <div id="err"></div>
+    <div id="msg"></div>
+
+    <div class="panel"><div class="scroll">
+      <table id="tbl">
+        <thead><tr>
+          <th class="l">账号</th>
+          <th class="l">UID</th>
+          <th class="l">AK</th>
+          <th>状态</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="rows"><tr><td colspan="5" class="skel">加载中…</td></tr></tbody>
+      </table>
+    </div></div>
+
+    <div class="stamp" id="count" style="margin-top:10px"></div>
+
+  </div></main>
+</div>
+
+<!-- 新增账号弹层 -->
+<div class="modal" id="modal">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <form id="addForm" autocomplete="off">
+      <div class="modal-head">
+        <h2 id="modalTitle">新增账号</h2>
+        <button type="button" class="modal-x" id="modalX" aria-label="关闭">×</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="errbox" id="formErr"></div>
+
+        <div class="field">
+          <label for="f-email">邮箱</label>
+          <input type="text" id="f-email" autocomplete="off">
+          <div class="hint">可以留空，只用来在列表里认人。</div>
+        </div>
+
+        <div class="field">
+          <label for="f-uid">UID</label>
+          <input type="text" id="f-uid" inputmode="numeric" autocomplete="off" required>
+        </div>
+
+        <div class="field">
+          <label for="f-ak">AK</label>
+          <input type="text" id="f-ak" autocomplete="off" required spellcheck="false">
+        </div>
+
+        <div class="field">
+          <label for="f-sk">SK</label>
+          <input type="password" id="f-sk" autocomplete="new-password" required spellcheck="false">
+          <div class="hint">保存前会拿这对密钥实调一次接口验证，并核对 UID 是否真的属于它 ——
+            验证不过就不写入。</div>
+        </div>
+      </div>
+
+      <div class="modal-foot">
+        <span class="stamp" id="formState"></span>
+        <span class="spacer"></span>
+        <button type="button" class="ghost" id="cancelBtn">取消</button>
+        <button type="submit" id="saveBtn">验证并保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="/common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+
+initShell('accounts');
+
+let ACCOUNTS = [];
+
+// ---- 列表 ----------------------------------------------------------------
+function render(){
+  const tb = $('rows');
+  if(!ACCOUNTS.length){
+    tb.innerHTML = '<tr><td colspan="5" class="skel">cred.xlsx 里没有账号</td></tr>';
+    $('count').textContent = '';
+    return;
+  }
+  tb.innerHTML = ACCOUNTS.map(a =>
+      '<tr' + (a.enabled ? '' : ' class="off"') + '>'
+    + '<td class="l"><span class="acct">' + esc(a.email || '(无邮箱)') + '</span></td>'
+    + '<td class="l num">' + esc(a.uid) + '</td>'
+    + '<td class="l dim">' + esc(a.ak_masked) + '</td>'
+    + '<td>' + (a.enabled ? '<span class="pill">启用</span>'
+                          : '<span class="pill bad">已停用</span>') + '</td>'
+    + '<td><button class="ghost" data-uid="' + esc(a.uid) + '" '
+    +     'data-to="' + (a.enabled ? '0' : '1') + '">'
+    +     (a.enabled ? '停用' : '启用') + '</button></td>'
+    + '</tr>').join('');
+
+  const on = ACCOUNTS.filter(a => a.enabled).length;
+  $('count').textContent = '共 ' + ACCOUNTS.length + ' 个账号 · ' + on + ' 个启用'
+    + (on < ACCOUNTS.length ? ' · ' + (ACCOUNTS.length - on) + ' 个已停用' : '');
+}
+
+function note(text, kind){
+  $('msg').innerHTML = text
+    ? '<div class="' + (kind === 'bad' ? 'errbox' : 'notebox') + '">' + esc(text) + '</div>'
+    : '';
+}
+
+async function load(){
+  $('err').innerHTML = '';
+  try{
+    // scope=all: 这是唯一需要看到停用账号的地方，否则停用了就再也找不回来
+    const res = await fetch(apiURL('/api/account-list', {scope: 'all'}),
+                            {cache:'no-store', headers: authHeader()});
+    if(res.status === 401){ return toLogin(); }
+    const d = await res.json();
+    if(!res.ok || d.error) throw new Error(d.error || ('HTTP ' + res.status));
+    ACCOUNTS = d.accounts || [];
+    render();
+  }catch(e){
+    $('err').innerHTML = '<div class="errbox">读不到账号列表: ' + esc(e.message) + '</div>';
+    $('rows').innerHTML = '<tr><td colspan="5" class="skel">—</td></tr>';
+  }
+}
+
+// ---- 启用 / 停用 ---------------------------------------------------------
+// 停用要点两次。用两段式按钮而不是 window.confirm(): 原生弹窗会挡住整页，
+// 在没有窗口焦点的环境里甚至根本不弹出来(页面看起来就是卡住了)。
+// 启用是恢复动作，一次点击即可。
+let pendingUid = null;
+let pendingTimer = null;
+
+function resetPending(){
+  clearTimeout(pendingTimer);
+  pendingTimer = null;
+  pendingUid = null;
+}
+
+$('rows').addEventListener('click', async ev => {
+  const btn = ev.target.closest('button[data-uid]');
+  if(!btn) return;
+  const uid = btn.dataset.uid;
+  const to = btn.dataset.to === '1';
+  const acct = ACCOUNTS.find(a => a.uid === uid) || {};
+  const who = acct.email || uid;
+
+  if(!to && pendingUid !== uid){
+    resetPending();
+    render();                       // 清掉别的行上可能还挂着的"确认"态
+    const fresh = $('rows').querySelector('button[data-uid="' + uid + '"]');
+    pendingUid = uid;
+    fresh.textContent = '确认停用？';
+    fresh.classList.add('danger');
+    fresh.title = '再点一次确认；4 秒后自动取消';
+    pendingTimer = setTimeout(() => { resetPending(); render(); }, 4000);
+    return;
+  }
+  resetPending();
+
+  btn.disabled = true;
+  btn.textContent = to ? '启用中…' : '停用中…';
+  note('');
+  try{
+    const d = await postJSON('/api/account/status', {uid: uid, enabled: to});
+    // 总览页那份 sessionStorage 快照现在是过期的 —— 不清掉的话点侧边栏
+    // 「总览」(带 ?restore=1)会拿旧快照渲染，看起来像停用没生效
+    clearOverviewSnapshot();
+    const i = ACCOUNTS.findIndex(a => a.uid === uid);
+    if(i >= 0 && d.account) ACCOUNTS[i] = d.account;
+    render();
+    note('已' + (to ? '启用' : '停用') + '「' + who + '」。');
+  }catch(e){
+    btn.disabled = false;
+    btn.textContent = to ? '启用' : '停用';
+    note('操作失败: ' + e.message, 'bad');
+  }
+});
+
+// ---- 新增账号弹层 --------------------------------------------------------
+const FIELDS = ['f-email', 'f-uid', 'f-ak', 'f-sk'];
+
+function openModal(){
+  $('formErr').classList.remove('show');
+  $('formState').textContent = '';
+  $('modal').classList.add('open');
+  $('f-email').focus();
+}
+
+function closeModal(){
+  $('modal').classList.remove('open');
+  // 关闭就清空 —— 别把 SK 留在 DOM 里
+  FIELDS.forEach(id => { $(id).value = ''; });
+  $('f-sk').type = 'password';
+}
+
+function formErr(text){
+  const box = $('formErr');
+  box.textContent = text;
+  box.classList.toggle('show', !!text);
+}
+
+$('addBtn').addEventListener('click', openModal);
+$('modalX').addEventListener('click', closeModal);
+$('cancelBtn').addEventListener('click', closeModal);
+// 点弹层外的遮罩区域关闭(点弹层本体不关)
+$('modal').addEventListener('click', ev => { if(ev.target === $('modal')) closeModal(); });
+document.addEventListener('keydown', ev => {
+  if(ev.key === 'Escape' && $('modal').classList.contains('open')) closeModal();
+});
+
+$('addForm').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const btn = $('saveBtn');
+  formErr('');
+
+  const body = {
+    email: $('f-email').value.trim(),
+    uid: $('f-uid').value.trim(),
+    ak: $('f-ak').value.trim(),
+    sk: $('f-sk').value.trim()
+  };
+  if(!body.uid || !body.ak || !body.sk){
+    return formErr('UID / AK / SK 都要填。');
+  }
+  if(!/^\d{4,20}$/.test(body.uid)){
+    return formErr('UID 应该是 4-20 位数字。');
+  }
+
+  btn.disabled = true;
+  btn.textContent = '验证中…';
+  $('formState').textContent = '正在调用 BytePlus 接口验证密钥…';
+  try{
+    const d = await postJSON('/api/account/add', body);
+    clearOverviewSnapshot();          // 同上: 总览快照已过期
+    closeModal();
+    await load();
+    note('已新增「' + (d.account.email || d.account.uid) + '」，密钥验证通过。');
+  }catch(e){
+    formErr(e.message);
+    $('formState').textContent = '';
+  }finally{
+    btn.disabled = false;
+    btn.textContent = '验证并保存';
+  }
+});
+
+load();
+</script>
+</body>
+</html>

@@ -20,6 +20,7 @@ import io
 import ipaddress
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -34,13 +35,38 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import api, auth, billing, config          # noqa: E402
-from app.creds import Account, CredError, load_accounts  # noqa: E402
+from app.creds import (Account, CredError, add_account,      # noqa: E402
+                       load_accounts, set_enabled)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_PATH = os.path.join(HERE, "index.html")
 LOGIN_PATH = os.path.join(HERE, "login.html")
-DETAIL_PATH = os.path.join(HERE, "detail.html")
+BILL_PATH = os.path.join(HERE, "bill.html")
+ACCOUNTS_PATH = os.path.join(HERE, "accounts.html")
 COMMON_JS_PATH = os.path.join(HERE, "common.js")
+APP_CSS_PATH = os.path.join(HERE, "app.css")
+
+# POST 请求体上限。这两个接口的请求体只有四个短字段，64KB 已经很宽松了。
+MAX_BODY = 64 * 1024
+
+# UID 是账号标识符，实测全是纯数字，且会被拿去当历史缓存的键。
+# 这里挡一道是为了拦「把邮箱填进 UID 框」这类明显错填 —— 真正的权威校验是
+# 下面拿 AK/SK 实调一次接口、比对返回的 AccountID。
+UID_RE = re.compile(r"^\d{4,20}$")
+
+# 图片目录。**这是本应用唯一按文件名取文件的入口** —— 其它路由全是白名单
+# 常量，天然没有穿越问题；这里必须自己防。规则见 _serve_static()。
+STATIC_DIR = os.path.join(HERE, "static")
+STATIC_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".webp": "image/webp", ".svg": "image/svg+xml", ".ico": "image/x-icon",
+}
+# 只允许"一层普通文件名": 首字符必须是字母数字，随后只准字母数字和 . _ -
+# 于是 /、\、%、: 全部落空 —— 连 ..%2f 这种编码形态都进不来(见下方注释)。
+STATIC_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+# 侧边栏和登录页都用它做 favicon，省得再放一份 .ico
+FAVICON_NAME = "Kuromi_Icon_50px_20260828.png"
 
 # 按需求: 所有账号均以美金授信/结算
 CURRENCY = "USD"
@@ -75,6 +101,25 @@ def utc_now_iso() -> str:
 
 def current_period() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m")
+
+
+def backup_dir() -> str:
+    """凭据表写入前的备份目录 —— 复用缓存目录。
+
+    不放在 cred.xlsx 旁边是因为线上 systemd 的 ProtectSystem=strict 只放开了
+    cache/ 和 cred.xlsx 本身，项目目录是只读的，往那儿新建文件会 EROFS。
+    """
+    return os.path.dirname(os.path.abspath(CFG["cache_file"])) or "."
+
+
+def enabled_only(accounts: List[Account]) -> List[Account]:
+    """过滤掉被软删除的账号。
+
+    **所有面向业务数据的接口都必须过这一道**: 停用的账号不进总览、不进账单页
+    下拉、也不能按 uid 直接查明细。唯一例外是账号管理页(scope=all)，
+    它本来就是用来把停用的账号找回来的。
+    """
+    return [a for a in accounts if a.enabled]
 
 
 # ===========================================================================
@@ -153,6 +198,10 @@ def warm_cache(accounts: List[Account]) -> None:
     所以只需扫一次并落盘；之后每次刷新只查当月。
     """
     cur = current_period()
+    accounts = enabled_only(accounts)      # 停用的账号不预热，白花接口配额
+    if not accounts:
+        print(" 没有启用的账号，跳过预热。")
+        return
     print(" 预热历史账期缓存(用于推算原授信额度)…")
     t0 = time.monotonic()
     total_fetched = 0
@@ -291,13 +340,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_asset(LOGIN_PATH)
         if path in ("/", "/index.html"):
             return self._serve_asset(INDEX_PATH)
-        if path == "/detail.html":
-            return self._serve_asset(DETAIL_PATH)
+        if path == "/bill.html":
+            return self._serve_asset(BILL_PATH)
+        if path == "/accounts.html":
+            return self._serve_asset(ACCOUNTS_PATH)
         if path == "/common.js":
             return self._serve_asset(
                 COMMON_JS_PATH, "application/javascript; charset=utf-8")
+        if path == "/app.css":
+            return self._serve_asset(APP_CSS_PATH, "text/css; charset=utf-8")
+        # 图片也必须免认证 —— 登录页的品牌图/图标是在登录**之前**加载的，
+        # 放到认证之后就只会得到一片 401 占位框。图片本身不含业务数据。
+        if path.startswith("/static/"):
+            return self._serve_static(path[len("/static/"):])
         if path == "/favicon.ico":
-            return self._send(204, b"", "image/x-icon")
+            return self._serve_static(FAVICON_NAME)
 
         # ---- 以下需要认证 ----
         if not self._authorized():
@@ -310,12 +367,74 @@ class Handler(BaseHTTPRequestHandler):
                                     "auth_enabled": config.auth_enabled(CFG)})
         if path == "/api/accounts":
             return self._api_accounts(parse_qs(parsed.query))
+        if path == "/api/account-list":
+            return self._api_account_list(parse_qs(parsed.query))
         if path == "/api/detail":
             return self._api_detail(parse_qs(parsed.query))
         return self._json(404, {"error": "未找到: {}".format(parsed.path)})
 
     def do_HEAD(self) -> None:  # noqa: N802
         self.do_GET()
+
+    def do_POST(self) -> None:  # noqa: N802
+        """写操作。目前只有账号管理那两个。
+
+        **顺序是: 先读完请求体，再校验凭据。** 反过来的话，401 响应发出去时
+        请求体还堵在连接里，HTTP/1.1 的 keep-alive 会把它当成下一个请求的
+        请求行去解析，后续请求全部错位。
+        """
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
+
+        body = self._read_body()
+        if body is None:
+            return
+        if not self._authorized():
+            return
+
+        data = self._parse_json(body)
+        if data is None:
+            return
+
+        if path == "/api/account/add":
+            return self._api_account_add(data)
+        if path == "/api/account/status":
+            return self._api_account_status(data)
+        return self._json(404, {"error": "未找到: {}".format(parsed.path)})
+
+    def _read_body(self) -> Optional[bytes]:
+        """按 Content-Length 读请求体。出错时响应已发出，调用方直接 return。"""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.close_connection = True
+            self._json(400, {"error": "Content-Length 不合法"})
+            return None
+        if length <= 0:
+            self.close_connection = True
+            self._json(400, {"error": "请求体是空的"})
+            return None
+        if length > MAX_BODY:
+            # 不读就回响应会让连接错位，所以直接关掉这条连接
+            self.close_connection = True
+            self._json(413, {"error": "请求体过大"})
+            return None
+        try:
+            return self.rfile.read(length)
+        except OSError:
+            self.close_connection = True
+            return None
+
+    def _parse_json(self, body: bytes) -> Optional[Dict[str, Any]]:
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except Exception:
+            self._json(400, {"error": "请求体不是合法 JSON"})
+            return None
+        if not isinstance(data, dict):
+            self._json(400, {"error": "请求体必须是 JSON 对象"})
+            return None
+        return data
 
     def _serve_asset(self, file_path: str,
                      content_type: str = "text/html; charset=utf-8") -> None:
@@ -327,6 +446,153 @@ class Handler(BaseHTTPRequestHandler):
                 os.path.basename(file_path), exc)})
         self._send(200, body, content_type, cache=self.REVALIDATE)
 
+    def _serve_static(self, name: str) -> None:
+        """/static/<文件名> —— 图片。**路径穿越防护全在这里**。
+
+        以前所有路由都是白名单常量，所以 /.git/config、/cred.xlsx、
+        /../config.json 天然全是 404/401。加了这个按文件名取文件的入口之后，
+        那份"免费的安全"就没了，得自己挡住三类东西:
+
+        1. 分隔符与上跳: STATIC_NAME_RE 只放过"一层普通文件名"，
+           /、\\、.. 一律不匹配。
+        2. 百分号编码: **故意不做 unquote**。BaseHTTPRequestHandler 不解码
+           self.path，所以 /static/%2e%2e%2fconfig.json 到这里仍是带 % 的原文，
+           而 % 不在正则字符集里 -> 直接落空。先解码再校验反而给自己开了个
+           绕过口(经典的双重解码问题)。因此文件名只准 ASCII。
+        3. 符号链接: 正则看不出 foo.png 是不是指向目录外的链接，所以再用
+           realpath 核一遍最终位置仍在 static/ 里(纵深防御)。
+
+        扩展名也是白名单: 就算有人把 cred.xlsx 拷进 static/，没有对应的
+        Content-Type 也照样 404，不会被当文件发出去。
+        """
+        if not STATIC_NAME_RE.match(name):
+            return self._json(404, {"error": "未找到"})
+        ctype = STATIC_TYPES.get(os.path.splitext(name)[1].lower())
+        if ctype is None:
+            return self._json(404, {"error": "未找到"})
+
+        base = os.path.normcase(os.path.realpath(STATIC_DIR))
+        real = os.path.normcase(os.path.realpath(os.path.join(STATIC_DIR, name)))
+        if real != base and not real.startswith(base + os.sep):
+            self.log_message("拦下越界静态请求: %s", name)
+            return self._json(404, {"error": "未找到"})
+        if not os.path.isfile(real):
+            return self._json(404, {"error": "未找到"})
+
+        try:
+            with open(real, "rb") as fh:
+                body = fh.read()
+        except OSError:
+            return self._json(404, {"error": "未找到"})
+        # 图片不是业务数据，可以放心让浏览器缓存。不加 immutable ——
+        # 换图时同名覆盖还能在一天内自然生效。
+        #
+        # CSP 是给 .svg 兜底的: SVG 是能带 <script> 的文档，直接访问
+        # /static/x.svg 就是一次同源脚本执行机会。default-src 'none' + sandbox
+        # 让它即使被直接打开也跑不了脚本；通过 <img> 加载时浏览器本就不执行
+        # 脚本，所以这条头不影响正常使用。
+        self._send(200, body, ctype,
+                   extra={"Content-Security-Policy": "default-src 'none'; sandbox"},
+                   cache="public, max-age=86400")
+
+    def _api_account_list(self, qs: Dict[str, List[str]]) -> None:
+        """账号列表。只读 cred.xlsx，**不打任何 BytePlus 接口** ——
+        账单页一进来就要把下拉框填上、管理页要秒开，都不该先等一轮 API。
+
+        scope=enabled(默认) 只回启用的，账单页下拉用；
+        scope=all 连停用的一起回，只有账号管理页用 —— 它本来就是用来把停用的
+        账号找回来的。
+
+        只回 uid / email / 脱敏 AK / 启用状态。AK 原文和 SK 都不出现在响应里。
+        """
+        scope = (qs.get("scope") or ["enabled"])[0].strip()
+        try:
+            accounts = load_accounts(CFG["cred_file"])
+        except CredError as exc:
+            return self._json(500, {"error": str(exc), "kind": "cred"})
+
+        rows = accounts if scope == "all" else enabled_only(accounts)
+        return self._json(200, {
+            "accounts": [{"uid": a.uid, "email": a.email,
+                          "ak_masked": a.ak_masked, "enabled": a.enabled}
+                         for a in rows],
+            "total": len(accounts),
+            "enabled_count": len(enabled_only(accounts)),
+            "current_period": current_period(),
+        })
+
+    # ---- 写操作: 账号管理 ----
+    def _account_view(self, acct: Account) -> Dict[str, Any]:
+        """写操作的回显。**只含脱敏字段** —— SK 绝不进响应，AK 原文也不回。"""
+        return {"uid": acct.uid, "email": acct.email,
+                "ak_masked": acct.ak_masked, "enabled": acct.enabled}
+
+    def _api_account_add(self, data: Dict[str, Any]) -> None:
+        """新增账号: 先拿 AK/SK 实调一次接口验证，通过了才写 cred.xlsx。
+
+        验证用最轻的 GetQuotaAcctInfo(约 0.3 秒)，并且**比对返回的 AccountID
+        和填入的 UID** —— 实测这两者恒等。UID 是历史缓存的键，配错了会把
+        另一个账号的消费算到这个账号头上，光验证"密钥能用"是不够的。
+        """
+        email = str(data.get("email") or "").strip()
+        uid = str(data.get("uid") or "").strip()
+        ak = str(data.get("ak") or "").strip()
+        sk = str(data.get("sk") or "").strip()
+
+        missing = [n for n, v in (("UID", uid), ("AK", ak), ("SK", sk)) if not v]
+        if missing:
+            return self._json(400, {"error": "{} 不能为空".format(" / ".join(missing))})
+        if not UID_RE.match(uid):
+            return self._json(400, {"error": "UID 应该是 4-20 位数字，收到的是 "
+                                             "'{}'".format(uid[:40])})
+
+        try:
+            quota = api.get_quota(ak, sk)
+        except api.BytePlusError as exc:
+            # 这条报错原文很有用(签名不匹配 / token 无效 是两种不同的错填)，
+            # 直接透出；里面不含 SK。
+            return self._json(400, {"error": "密钥验证失败: {}".format(exc.message),
+                                    "kind": "verify", "detail": exc.as_dict()})
+        except Exception as exc:  # pragma: no cover
+            return self._json(502, {"error": "验证时出错: {}: {}".format(
+                type(exc).__name__, exc), "kind": "verify"})
+
+        account_id = api.pick(quota, "AccountID", "AccountId")
+        if account_id and str(account_id).strip() != uid:
+            return self._json(400, {
+                "error": "UID 和密钥不匹配: 这把密钥属于账号 {}，不是 {}".format(
+                    str(account_id).strip(), uid),
+                "kind": "mismatch"})
+
+        try:
+            acct = add_account(email, uid, ak, sk,
+                               path=CFG["cred_file"], backup_dir=backup_dir())
+        except CredError as exc:
+            return self._json(400, {"error": str(exc), "kind": "cred"})
+
+        # 日志只打脱敏 AK，绝不打 SK
+        self.log_message("新增账号 %s UID=%s AK=%s", email or "(无邮箱)",
+                         uid, acct.ak_masked)
+        return self._json(200, {"ok": True, "account": self._account_view(acct)})
+
+    def _api_account_status(self, data: Dict[str, Any]) -> None:
+        """启用/停用(软删除)。停用后该账号从总览、账单下拉和明细接口一起消失。"""
+        uid = str(data.get("uid") or "").strip()
+        enabled = data.get("enabled")
+        if not uid:
+            return self._json(400, {"error": "缺少参数 uid"})
+        if not isinstance(enabled, bool):
+            return self._json(400, {"error": "enabled 必须是 true 或 false"})
+
+        try:
+            acct = set_enabled(uid, enabled,
+                               path=CFG["cred_file"], backup_dir=backup_dir())
+        except CredError as exc:
+            return self._json(400, {"error": str(exc), "kind": "cred"})
+
+        self.log_message("账号 UID=%s 改为 %s", uid, "启用" if enabled else "停用")
+        return self._json(200, {"ok": True, "account": self._account_view(acct)})
+
     def _api_accounts(self, qs: Dict[str, List[str]]) -> None:
         period = (qs.get("period") or [current_period()])[0].strip()
         if not billing.PERIOD_RE.match(period):
@@ -336,21 +602,35 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {
                 "error": "账期 {} 还没到".format(period)})
 
-        # 每次请求都重读 cred.xlsx —— 加了新账号不用重启
+        # 每次请求都重读 cred.xlsx —— 加了新账号/改了状态都不用重启
         try:
             accounts = load_accounts(CFG["cred_file"])
         except CredError as exc:
             return self._json(500, {"error": str(exc), "kind": "cred"})
 
+        active = enabled_only(accounts)
         try:
-            payload = collect(accounts, period)
+            payload = collect(active, period)
         except Exception as exc:  # pragma: no cover
             return self._json(500, {"error": "采集失败: {}: {}".format(
                 type(exc).__name__, exc)})
+        # 让前端能区分"表里没账号"和"账号都被停用了" —— 两种情况的下一步动作
+        # 完全不同(一个是去填表，一个是去管理页启用)
+        payload["disabled_count"] = len(accounts) - len(active)
         return self._json(200, payload)
 
     def _api_detail(self, qs: Dict[str, List[str]]) -> None:
-        """某账号某账期的账单明细。按需调用 —— 不点开就不查。"""
+        """某账号某账期的账单明细 + 该账号的授信信息(账单页顶部那四张卡)。
+
+        授信部分直接复用 billing.build_account —— 和总览页同一个函数，
+        所以「原授信额度 / 授信余额 / 已用」的口径必然一致。自己在这里
+        再算一套迟早会和总览页对不上。
+
+        代价是多一次 quota 调用 + 一次当月概览(历史账期走缓存)，实测总耗时
+        比只取明细多几百毫秒。明细本身的概览对账**不复用**这份数据: 那道
+        ✓/⚠ 校验必须来自一次独立的实时概览查询，拿缓存值去对账等于自己
+        跟自己对，校验就废了。
+        """
         uid = (qs.get("uid") or [""])[0].strip()
         period = (qs.get("period") or [current_period()])[0].strip()
 
@@ -371,6 +651,10 @@ class Handler(BaseHTTPRequestHandler):
         if acct is None:
             # 不回显 uid 以外的信息，也不列出有哪些账号
             return self._json(404, {"error": "找不到 UID 为 {} 的账号".format(uid)})
+        # 停用的账号一律拒绝，包括直接带 uid 访问的老书签
+        if not acct.enabled:
+            return self._json(403, {"error": "账号 {} 已停用".format(uid),
+                                    "kind": "disabled"})
 
         started = time.monotonic()
         try:
@@ -380,6 +664,23 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # pragma: no cover
             return self._json(500, {"error": "取明细失败: {}: {}".format(
                 type(exc).__name__, exc)})
+
+        # 授信信息。单项失败只让那几张卡显示"查询失败"，明细照常展示 ——
+        # 页面主体是明细，不该被额度查询失败拖成整页报错。
+        payload["account"] = None
+        payload["account_error"] = None
+        try:
+            payload["account"] = billing.build_account(
+                acct, period, current_period(), HISTORY,
+                CFG["history_months"], CFG["empty_months_stop"])
+            if HISTORY is not None:
+                HISTORY.save()      # scan_history 可能写入了新的已结账月份
+        except Exception as exc:    # build_account 内部已按项兜错，这里是保险
+            payload["account_error"] = {
+                "message": "{}: {}".format(type(exc).__name__, exc),
+                "code": None, "http_status": None,
+                "request_id": None, "rate_limit": False,
+            }
 
         payload["elapsed_ms"] = int((time.monotonic() - started) * 1000)
         payload["fetched_at"] = utc_now_iso()
@@ -461,10 +762,15 @@ def main() -> None:
     print("=" * 62)
     print(" BytePlus 账单管理系统")
     print("=" * 62)
-    print(" 账号数   : {}".format(len(accounts)))
+    active = [a for a in accounts if a.enabled]
+    print(" 账号数   : {}{}".format(
+        len(active),
+        "  (另有 {} 个已停用)".format(len(accounts) - len(active))
+        if len(active) != len(accounts) else ""))
     for a in accounts:
-        print("   - {:<24} UID={:<12} AK={}".format(
-            a.email or "(无邮箱)", a.uid, a.ak_masked))
+        print("   - {:<24} UID={:<12} AK={}{}".format(
+            a.email or "(无邮箱)", a.uid, a.ak_masked,
+            "" if a.enabled else "   [已停用]"))
     print(" 监听     : {}:{}".format(CFG["host"], CFG["port"]))
     print(" 地址     : {}".format(url))
     print(" 认证     : {}".format(

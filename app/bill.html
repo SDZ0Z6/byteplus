@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>账单 · BytePlus Kuromi 平台</title>
+<link rel="icon" href="/static/Kuromi_Icon_50px_20260828.png">
+<link rel="stylesheet" href="/app.css">
+<!-- 侧边栏收起状态必须在首帧之前定好，否则切页时侧边栏会先画成展开态再抽回去 -->
+<script>
+try{
+  document.documentElement.dataset.side =
+    (localStorage.getItem('bp_side') === 'mini') ? 'mini' : 'full';
+}catch(e){ document.documentElement.dataset.side = 'full'; }
+</script>
+<style>
+  /* 12 列全展开，比总览表宽得多，靠面板内部横向滚动 */
+  #tbl{min-width:1240px}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="side" id="side"></aside>
+  <div class="backdrop" id="backdrop"></div>
+
+  <main class="main"><div class="wrap">
+
+    <div class="topbar">
+      <button class="hamb" id="hamb" type="button" aria-label="菜单"></button>
+      <h1>账单</h1>
+      <span class="sub">按账号 / 账期查看日消费趋势与资源级明细（美金 USD）</span>
+    </div>
+
+    <div class="toolbar">
+      <label for="acct">账号</label>
+      <select id="acct"><option>加载中…</option></select>
+      <label for="period">账期</label>
+      <input type="month" id="period">
+      <button id="refresh">刷新</button>
+      <span class="spacer"></span>
+      <span class="stamp" id="stamp"></span>
+    </div>
+
+    <div id="hint"></div>
+    <div id="err"></div>
+
+    <div class="acctbar" id="acctbar" hidden></div>
+    <div class="cards" id="cards"></div>
+
+    <div id="chart"></div>
+
+    <div class="toolbar">
+      <!-- 一个「日期」标签管两个框，所以结束日期必须自己带 aria-label，
+           否则读屏软件念到它时是个没有名字的输入框 -->
+      <label for="from">日期</label>
+      <input type="date" id="from" aria-label="开始日期" title="开始日期">
+      <span class="dim">–</span>
+      <input type="date" id="to" aria-label="结束日期" title="结束日期">
+      <label for="prod">产品</label>
+      <select class="sm" id="prod"><option value="">全部产品</option></select>
+      <label for="region">地域</label>
+      <select class="sm" id="region"><option value="">全部地域</option></select>
+      <span class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 4.5 4.5"/></svg>
+        <input type="text" id="q" placeholder="搜实例 / 规格 / 项目">
+      </span>
+      <label class="check"><input type="checkbox" id="onlySpend">只看有消费的行</label>
+      <button class="ghost" id="reset">重置筛选</button>
+      <span class="spacer"></span>
+      <span class="stamp" id="count"></span>
+    </div>
+
+    <div class="panel">
+      <div class="scroll tall">
+        <table id="tbl">
+          <thead id="thead"></thead>
+          <tbody id="rows"><tr><td colspan="12" class="skel">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pager" id="pager" hidden></div>
+    </div>
+
+    <div class="totals" id="totals"></div>
+
+  </div></main>
+</div>
+
+<script src="/common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+
+initShell('bill');
+
+function qs(name){
+  try{ return new URLSearchParams(location.search).get(name); }
+  catch(e){ return null; }
+}
+
+let UID = (qs('uid') || '').trim();
+let period = (qs('period') || '').trim();
+if(!PERIOD_RE.test(period)) period = defaultPeriod();
+
+let ACCOUNTS = [];   // 账号下拉的数据源(只含 uid/email/脱敏 AK)
+let DATA = null;     // 服务端返回的整月数据
+let ROWS = [];       // 扁平化后的全部明细行
+let sortKey = 'date', sortDir = 1;
+let page = 1;
+
+// ---- 列定义 --------------------------------------------------------------
+// 表头和单元格都从这里生成 —— 12 列手写两遍，早晚会错位一列。
+// n:true 表示按数值排序；l:true 表示左对齐(文本列)。
+const COLS = [
+  {k:'date', t:'日期', l:true, get:r=>r.date,
+   render:r => r.date ? '<span class="num">'+esc(r.date)+'</span>'
+                      : '<span class="dim">无日期</span>'},
+  {k:'product', t:'产品 / 实例', l:true, get:r=>r.product,
+   render:r => '<div>'+esc(r.product)+'</div><div class="meta">'
+             + esc(r.instance_name || r.instance_id || '—')+'</div>'},
+  {k:'instance_id', t:'实例 ID', l:true, get:r=>r.instance_id,
+   render:r => '<span class="dim">'+esc(r.instance_id || '—')+'</span>'},
+  {k:'region', t:'地域', l:true, get:r=>r.region,
+   render:r => esc(r.region || '—')},
+  {k:'spec', t:'规格', l:true, get:r=>r.spec,
+   render:r => '<span class="dim">'+esc(r.spec || '—')+'</span>'},
+  {k:'billing_mode', t:'计费方式', l:true, get:r=>r.billing_mode,
+   render:r => '<span class="dim">'+esc(r.billing_mode || '—')+'</span>'},
+  {k:'price', t:'单价', n:true, get:r=>r.price,
+   render:r => r.price
+     ? '<span class="dim num">'+esc(r.price)
+       + (r.price_unit ? ' <span class="meta">'+esc(r.price_unit)+'</span>' : '')+'</span>'
+     : '<span class="dim">—</span>'},
+  {k:'usage', t:'用量', n:true, get:r=>r.usage,
+   render:r => r.usage
+     ? '<span class="dim num">'+esc(r.usage)
+       + (r.usage_unit ? ' <span class="meta">'+esc(r.usage_unit)+'</span>' : '')+'</span>'
+     : '<span class="dim">—</span>'},
+  {k:'original', t:'原始金额', n:true, get:r=>r.original,
+   render:r => '<span class="dim">'+amt6(r.original)+'</span>'},
+  {k:'rounded', t:'抹零', n:true, get:r=>r.rounded,
+   render:r => '<span class="'+(nonZero(r.rounded) ? 'warnval' : 'dim')+'">'
+             + amt6(r.rounded)+'</span>'},
+  {k:'payable', t:'应付金额', n:true, get:r=>r.payable,
+   render:r => '<span class="'+(Number(r.payable) === 0 ? 'zero' : 'strong')+'">'
+             + money(r.payable)+'</span>'},
+  {k:'project', t:'项目', l:true, get:r=>r.project,
+   render:r => '<span class="dim">'+esc(r.project || '—')+'</span>'}
+];
+
+// 搜索命中的字段。金额不参与 —— 输 "1.68" 想找那笔钱，命中的却是实例 ID 里
+// 恰好含这几个数字的行，反而更难找。
+const SEARCH_KEYS = ['date','product','instance_name','instance_id','region',
+                     'spec','billing_mode','project'];
+
+// ---- URL / 筛选状态 ------------------------------------------------------
+function syncURL(){
+  const u = new URL(location.href);
+  u.searchParams.set('uid', UID);
+  u.searchParams.set('period', period);
+  history.replaceState(null, '', u.pathname + u.search);
+}
+
+function pageSize(){
+  const v = $('pageSize') ? $('pageSize').value : '50';
+  return v === 'all' ? Infinity : Number(v);
+}
+
+// ---- 账号信息 + 授信卡 ---------------------------------------------------
+function renderAccount(d){
+  const a = d.account || {};
+  const bar = $('acctbar');
+  bar.hidden = false;
+  bar.innerHTML =
+      '<span class="who">'+esc(d.email || '(无邮箱)')+'</span>'
+    + '<span class="kv">UID '+esc(d.uid)+'</span>'
+    + (a.ak_masked ? '<span class="kv">AK '+esc(a.ak_masked)+'</span>' : '')
+    + '<span class="spacer"></span>'
+    + '<span class="kv">账期 '+esc(d.period)
+    +   (d.is_current_month ? ' · 截至 '+esc(d.through) : ' · 已结账')+'</span>';
+
+  const cur = ' <span class="dim" style="font-size:12px;font-weight:400">'
+            + esc(d.currency || 'USD')+'</span>';
+  const q = a.quota || {};
+  const fail = '<span class="bad" style="font-size:15px">查询失败</span>';
+
+  const cards = [
+    ['原授信额度',
+     d.account_error ? fail
+       : money(a.granted, {atLeast: a.granted_partial}) + cur, ''],
+    ['授信余额',
+     (d.account_error || a.quota_error) ? fail : money(q.balance) + cur, ''],
+    ['已用（累计消费）',
+     d.account_error ? fail : money(a.used) + cur, ''],
+    [esc(d.period)+' 消费',
+     money(d.total_payable) + cur, ' accent']
+  ];
+  $('cards').innerHTML = cards.map(([k,v,cls]) =>
+    '<div class="card'+cls+'"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>').join('');
+}
+
+// ---- 日消费柱状图 --------------------------------------------------------
+// 单序列(每天的应付合计)，不区分计费方式 —— 明细表的「计费方式」列已经逐行
+// 说明了，图上再拆一次是重复。图永远画整月，不受下面的搜索/分页影响。
+function renderChart(d){
+  const cur = ' ' + (d.currency || 'USD');
+  const max = Number(d.max_payable) || 0;
+  const days = d.days || [];
+
+  if(!days.length){ $('chart').innerHTML = ''; return; }
+
+  const cols = days.map(g => {
+    const v = Number(g.payable) || 0;
+    const pct = max > 0 ? (v / max * 100) : 0;
+    const tip = esc(g.date) + '<br><b>' + v.toFixed(2) + esc(cur) + '</b>'
+              + (g.rows.length ? '<br><span class="dim">' + g.rows.length + ' 项</span>' : '');
+    return '<div class="col' + (v > 0 ? '' : ' zero') + '">'
+         +   '<div class="bar2" style="height:' + pct.toFixed(2) + '%"></div>'
+         +   '<div class="tip">' + tip + '</div>'
+         + '</div>';
+  });
+  const labels = days.map(g =>
+    '<span title="'+esc(g.date)+'">'+g.date.slice(8)+'</span>');
+
+  const ymax = max > 0 ? max : 1;
+  $('chart').innerHTML =
+      '<div class="chart">'
+    + '<div class="chart-head">'
+    +   '<h2>日消费趋势</h2>'
+    +   '<span class="hint">'+esc(d.period)
+    +     (d.is_current_month ? ' · 截至 '+esc(d.through) : '')+'</span>'
+    +   '<span class="spacer"></span>'
+    +   '<span class="hint">峰值 '+ymax.toFixed(2)+esc(cur)+'</span>'
+    + '</div>'
+    + '<div class="chart-body">'
+    +   '<div class="yaxis"><span>'+ymax.toFixed(2)+'</span>'
+    +     '<span>'+(ymax/2).toFixed(2)+'</span><span>0.00</span></div>'
+    +   '<div class="plot-wrap">'
+    +     '<div class="plot">'+cols.join('')+'</div>'
+    +     '<div class="xaxis">'+labels.join('')+'</div>'
+    +   '</div>'
+    + '</div></div>';
+}
+
+// ---- 明细表 --------------------------------------------------------------
+function renderHead(){
+  $('thead').innerHTML = '<tr>' + COLS.map(c =>
+      '<th class="sort'+(c.l ? ' l' : '')+'" data-k="'+c.k+'" aria-sort="'
+    + (sortKey === c.k ? (sortDir > 0 ? 'ascending' : 'descending') : 'none')+'">'
+    + esc(c.t) + '<span class="ind"></span></th>').join('') + '</tr>';
+}
+
+// 产品/地域下拉的选项来自**当前这份数据**: 不同账号、不同账期用到的产品和
+// 地域完全不同，写死一份清单必然过期。换数据后原选中值若还在就保留，否则回"全部"。
+function fillFacets(){
+  const distinct = get => [...new Set(ROWS.map(get).filter(Boolean))]
+                            .sort((a, b) => a.localeCompare(b, 'zh'));
+  const fill = (id, values, allLabel) => {
+    const sel = $(id), prev = sel.value;
+    sel.innerHTML = '<option value="">' + allLabel + '</option>'
+      + values.map(v => '<option value="'+esc(v)+'">'+esc(v)+'</option>').join('');
+    sel.value = values.indexOf(prev) !== -1 ? prev : '';
+  };
+  fill('prod', distinct(r => r.product), '全部产品');
+  fill('region', distinct(r => r.region), '全部地域');
+}
+
+// 日期筛选框限定在本账期内。换账期之后落在区间外的旧值**必须清掉** ——
+// 留着就是一张空表，而且看不出为什么空。
+function syncDateBounds(d){
+  const days = d.days || [];
+  const lo = days.length ? days[0].date : d.period + '-01';
+  const hi = days.length ? days[days.length - 1].date : d.through;
+  ['from', 'to'].forEach(id => {
+    const el = $(id);
+    el.min = lo; el.max = hi;
+    if(el.value && (el.value < lo || el.value > hi)) el.value = '';
+  });
+}
+
+function filtered(){
+  const kw = ($('q').value || '').trim().toLowerCase();
+  const from = $('from').value, to = $('to').value;
+  const prod = $('prod').value, region = $('region').value;
+  let rows = ROWS;
+  // 日期是 ISO(YYYY-MM-DD)，字符串比较即等于时间比较。
+  // 无日期的行放不进任何区间，设了区间就会被排除 —— 计数行会显示"筛选出 N 条"，
+  // 不会静默丢数。
+  if(from) rows = rows.filter(r => r.date && r.date >= from);
+  if(to)   rows = rows.filter(r => r.date && r.date <= to);
+  if(prod) rows = rows.filter(r => r.product === prod);
+  if(region) rows = rows.filter(r => r.region === region);
+  if($('onlySpend').checked) rows = rows.filter(r => Number(r.payable) !== 0);
+  if(kw){
+    rows = rows.filter(r => SEARCH_KEYS.some(k =>
+      r[k] && String(r[k]).toLowerCase().indexOf(kw) !== -1));
+  }
+  const col = COLS.find(c => c.k === sortKey);
+  // 默认态(日期升序)不用排: 服务端已按日期给出、且同一天内按金额倒序，
+  // 原顺序本身就是想要的结果，sortRows 是稳定排序所以结果也一致。
+  return col ? sortRows(rows, col.get, !!col.n, sortDir) : rows;
+}
+
+function renderRows(){
+  const rows = filtered();
+  const size = pageSize();
+  const pages = Math.max(1, Math.ceil(rows.length / (size === Infinity ? Math.max(1, rows.length) : size)));
+  if(page > pages) page = pages;
+  const start = size === Infinity ? 0 : (page - 1) * size;
+  const slice = size === Infinity ? rows : rows.slice(start, start + size);
+
+  // 空表的两种原因要分开说: 该账期本来就没消费，和"筛掉了所有行"，
+  // 处理动作完全不同(一个是没数据，一个是清一下搜索框)。
+  $('rows').innerHTML = slice.length
+    ? slice.map(r => '<tr>' + COLS.map(c =>
+        '<td'+(c.l ? ' class="l"' : '')+'>'+c.render(r)+'</td>').join('') + '</tr>').join('')
+    : '<tr><td colspan="'+COLS.length+'" class="skel">'
+      + (ROWS.length ? '没有符合条件的明细（试试清空搜索或关掉筛选）'
+                     : '该账期没有消费记录')
+      + '</td></tr>';
+
+  // 计数与小计: 有筛选时必须把"看到的"和"全部"分开写清楚，
+  // 否则页脚合计和眼前的行对不上，会被当成算错。
+  const sub = slice.reduce((s, r) => s + (Number(r.payable) || 0), 0);
+  const isFiltered = rows.length !== ROWS.length;
+  $('count').innerHTML = '共 '+ROWS.length+' 条'
+    + (isFiltered ? ' · 筛选出 '+rows.length+' 条' : '')
+    + (size !== Infinity && rows.length > size
+        ? ' · 本页 '+(start+1)+'–'+(start+slice.length) : '')
+    // 说清楚筛选的作用范围: 图和页脚合计都是整月全量，不跟着筛选变。
+    // 去掉页脚那段说明之后，这是唯一还会提醒这件事的地方。
+    + (isFiltered ? ' · <span class="dim">图表与合计仍为整月</span>' : '');
+
+  const pager = $('pager');
+  pager.hidden = false;
+  pager.innerHTML =
+      '<label for="pageSize">每页</label>'
+    + '<select id="pageSize">'
+    +   ['50','100'].map(v => '<option value="'+v+'"'
+        + (String(size) === v ? ' selected' : '')+'>'+v+'</option>').join('')
+    +   '<option value="all"'+(size === Infinity ? ' selected' : '')+'>全部</option>'
+    + '</select>'
+    + '<span class="spacer"></span>'
+    + '<span>本页小计 '+sub.toFixed(2)+' '+esc(DATA.currency || 'USD')+'</span>'
+    + '<span class="spacer"></span>'
+    + '<button class="ghost" id="prev"'+(page <= 1 ? ' disabled' : '')+'>‹ 上一页</button>'
+    + '<span>'+page+' / '+pages+'</span>'
+    + '<button class="ghost" id="next"'+(page >= pages ? ' disabled' : '')+'>下一页 ›</button>';
+
+  $('pageSize').addEventListener('change', () => { page = 1; renderRows(); });
+  $('prev').addEventListener('click', () => { if(page > 1){ page--; renderRows(); } });
+  $('next').addEventListener('click', () => { if(page < pages){ page++; renderRows(); } });
+}
+
+// ---- 合计 + 对账 ---------------------------------------------------------
+// 明细合计应当等于概览合计(两边都取 PosttaxAmount)。概览由服务端一并返回，
+// 因为本页拿不到总览页那份数据。**这里是这个功能的信任锚点**: 对不上要显式
+// 报警，绝不能静默当作一致。合计始终是整月全量，与搜索/分页无关。
+function renderTotals(d){
+  const cur = ' <span class="dim">'+esc(d.currency || 'USD')+'</span>';
+  let check;
+  if(d.overview_error){
+    check = '<span class="bad">⚠ 概览取数失败，无法核对：'+errText(d.overview_error)+'</span>';
+  }else if(d.overview_total === null || d.overview_total === undefined){
+    check = '<span class="dim">概览无数据，未核对</span>';
+  }else if(Number(d.overview_total) === Number(d.total_payable)){
+    check = '<span class="good">✓ 与概览合计一致</span>';
+  }else{
+    check = '<span class="bad">⚠ 与概览合计不一致（概览 '
+          + esc(String(d.overview_total))+'）</span>';
+  }
+
+  $('totals').innerHTML =
+      '<b>合计应付 '+money(d.total_payable)+cur+'</b>'
+    + '<span class="dim">原始金额 '+amt6(d.total_original)+cur+'（差额为抹零）</span>'
+    + check
+    + (d.truncated ? '<span class="bad">⚠ 超出翻页上限，可能不全</span>' : '')
+    + (d.reported_total !== null && d.reported_total !== d.row_count
+        ? '<span class="bad">⚠ 接口报告 '+d.reported_total+' 条，实际取到 '
+          + d.row_count+' 条</span>' : '')
+    + (d.undated_rows && d.undated_rows.length
+        ? '<span class="warnval">'+d.undated_rows.length
+          + ' 条无日期（已计入合计，日期列显示"无日期"）</span>' : '');
+}
+
+// ---- 取数 ----------------------------------------------------------------
+async function fetchAccounts(){
+  const res = await fetch(apiURL('/api/account-list'),
+                          {cache:'no-store', headers: authHeader()});
+  if(res.status === 401){ toLogin(); return null; }
+  const d = await res.json();
+  if(!res.ok || d.error) throw new Error(d.error || ('HTTP ' + res.status));
+  return d.accounts || [];
+}
+
+async function load(){
+  const btn = $('refresh');
+  btn.disabled = true; btn.textContent = '查询中…';
+  $('err').innerHTML = '';
+  $('hint').innerHTML = '';       // 换账号/换账期后旧提示就不再成立
+  $('stamp').textContent = '正在查询 BytePlus API…';
+
+  try{
+    const res = await fetch(apiURL('/api/detail', {uid: UID, period: period}),
+                            {cache:'no-store', headers: authHeader()});
+    if(res.status === 401){ return toLogin(); }
+    const d = await res.json();
+    if(!res.ok || d.error) throw new Error(d.error || ('HTTP ' + res.status));
+
+    DATA = d;
+    // 扁平化: 每天的行首尾相接，再接上无日期的行(它们也计入合计，不能丢)
+    ROWS = (d.days || []).reduce((acc, g) => acc.concat(g.rows), [])
+             .concat(d.undated_rows || []);
+    page = 1;
+    syncDateBounds(d);   // 必须在 renderRows 之前: 它会清掉越界的旧日期值
+    fillFacets();
+
+    document.title = '账单 · ' + (d.email || d.uid);
+    renderAccount(d);
+    renderChart(d);
+    renderHead();
+    renderRows();
+    renderTotals(d);
+    $('stamp').textContent = '共 '+d.row_count+' 条 · 更新于 '
+      + fmtLocal(d.fetched_at) + ' · 耗时 '+d.elapsed_ms+' ms';
+  }catch(e){
+    $('err').innerHTML = '<div class="errbox">加载失败: '+esc(e.message)+'</div>';
+    $('rows').innerHTML = '<tr><td colspan="'+COLS.length+'" class="skel">—</td></tr>';
+    $('cards').innerHTML = '';
+    $('chart').innerHTML = '';
+    $('totals').innerHTML = '';
+    $('pager').hidden = true;
+    $('count').textContent = '';
+    $('stamp').textContent = '';
+  }finally{
+    btn.disabled = false; btn.textContent = '刷新';
+  }
+}
+
+// ---- 事件 ----------------------------------------------------------------
+$('period').value = period;
+$('period').max = defaultPeriod();
+
+$('refresh').addEventListener('click', load);
+
+$('period').addEventListener('change', () => {
+  const v = $('period').value;
+  if(!PERIOD_RE.test(v)) return;
+  period = v; syncURL(); load();
+});
+
+$('acct').addEventListener('change', () => {
+  UID = $('acct').value; syncURL(); load();
+});
+
+// 表头排序: 同一列再点一次翻转方向；换列时按该列类型给默认方向 ——
+// 金额/用量默认降序(先看最大的)，日期/文本默认升序。
+$('thead').addEventListener('click', ev => {
+  const th = ev.target.closest('th.sort');
+  if(!th) return;
+  const k = th.dataset.k;
+  if(k === sortKey){
+    sortDir = -sortDir;
+  }else{
+    sortKey = k;
+    const col = COLS.find(c => c.k === k);
+    sortDir = (col && col.n) ? -1 : 1;
+  }
+  page = 1;
+  renderHead();
+  renderRows();
+});
+
+let kwTimer = null;
+$('q').addEventListener('input', () => {
+  clearTimeout(kwTimer);
+  kwTimer = setTimeout(() => { page = 1; renderRows(); }, 120);
+});
+$('onlySpend').addEventListener('change', () => { page = 1; renderRows(); });
+
+// 日期区间 / 产品 / 地域: 纯前端筛选，不重新打接口
+['from', 'to', 'prod', 'region'].forEach(id =>
+  $(id).addEventListener('change', () => { page = 1; renderRows(); }));
+
+// 一次清掉全部筛选。筛选项多了之后，"表是空的但想不起来自己勾了什么"
+// 是最容易卡住人的状态，给个一键出口。
+$('reset').addEventListener('click', () => {
+  ['from', 'to', 'prod', 'region', 'q'].forEach(id => $(id).value = '');
+  $('onlySpend').checked = false;
+  page = 1;
+  renderRows();
+});
+
+// ---- 启动 ----------------------------------------------------------------
+(async function boot(){
+  try{
+    const list = await fetchAccounts();
+    if(list === null) return;            // 已跳登录页
+    ACCOUNTS = list;
+    if(!ACCOUNTS.length){
+      $('err').innerHTML = '<div class="errbox">cred.xlsx 里没有账号</div>';
+      $('rows').innerHTML = '<tr><td colspan="'+COLS.length+'" class="skel">—</td></tr>';
+      $('acct').innerHTML = '<option>无账号</option>';
+      return;
+    }
+    // URL 里的 uid 不在列表里(被停用了、账号被删了、或手输错了)就退回第一个。
+    // 但**必须说一声** —— 静默换成另一个账号的账单，人会以为自己看的还是
+    // 原来那个账号，那比报错更糟。
+    const asked = UID;
+    const fellBack = asked && !ACCOUNTS.some(a => a.uid === asked);
+    if(!ACCOUNTS.some(a => a.uid === UID)) UID = ACCOUNTS[0].uid;
+    $('acct').innerHTML = ACCOUNTS.map(a =>
+      '<option value="'+esc(a.uid)+'">'+esc(a.email || '(无邮箱)')
+      + ' · '+esc(a.uid)+'</option>').join('');
+    $('acct').value = UID;
+    syncURL();
+    await load();
+    if(fellBack){
+      const now = ACCOUNTS.find(a => a.uid === UID) || {};
+      $('hint').innerHTML = '<div class="notebox">账号 ' + esc(asked)
+        + ' 不在可用列表里（可能已在账号管理里停用），已切换到 '
+        + esc(now.email || UID) + '。</div>';
+    }
+  }catch(e){
+    $('err').innerHTML = '<div class="errbox">读不到账号列表: '+esc(e.message)+'</div>';
+    $('acct').innerHTML = '<option>加载失败</option>';
+    $('rows').innerHTML = '<tr><td colspan="'+COLS.length+'" class="skel">—</td></tr>';
+  }
+})();
+</script>
+</body>
+</html>

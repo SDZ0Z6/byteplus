@@ -1,0 +1,400 @@
+/* 总览页 + 账单页共用的设计系统。
+ *
+ * 单一浅色主题 —— 按需求固定 Light Mode，**没有** prefers-color-scheme 分支。
+ * :root 上的 color-scheme:light 不是可选项: 少了它，系统处于深色模式时
+ * Chrome 会把 <input type=month>、<select> 和滚动条按深色渲染，
+ * 于是页面自己是白底、原生控件却是黑的。
+ *
+ * 主色 #1664ff 在白底上对比度 4.89:1(算过)，小字号文本也达标。
+ * ok/warn/err 沿用旧版那组深色值 —— Arco 的 #00b42a / #f53f3f 亮度太高，
+ * 白底上做小字只有 2.6 / 3.7:1，看着漂亮但读不清。
+ */
+
+/* ---- 1. 变量 ------------------------------------------------------------ */
+:root{
+  color-scheme: light;
+
+  --blue:#1664ff;
+  --blue-hover:#0e42d2;
+  --blue-1:#f2f6ff;          /* 极浅底: 选中态 / 悬停态 */
+  --blue-2:#dbe7ff;          /* 浅边框 */
+
+  --bg:#f5f7fa;
+  --panel:#fff;
+  --border:#e5e6eb;
+  --divider:#f0f1f5;         /* 表格内部分隔线，比外边框更浅 */
+
+  --text:#1d2129;
+  --text-2:#4e5969;
+  --muted:#86909c;
+
+  --ok:#128a52;   --ok-bg:#eaf7f0;
+  --warn:#b45309; --warn-bg:#fff7e8;
+  --err:#c2261a;  --err-bg:#fdf2f1;
+
+  --head:#f7f8fa;            /* 表头 */
+  --zebra:#fcfcfd;
+
+  --radius:10px;
+  --shadow:0 1px 2px rgba(29,33,41,.04), 0 6px 18px rgba(29,33,41,.05);
+  --side-w:216px;
+  --side-mini:64px;
+}
+
+*{box-sizing:border-box}
+
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font:14px/1.55 "Segoe UI","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:var(--blue)}
+code{background:var(--head);border:1px solid var(--divider);
+     padding:1px 5px;border-radius:4px;font-size:.92em}
+
+/* ---- 2. 外壳: 侧边栏 + 主区 --------------------------------------------- */
+.app{display:flex;align-items:stretch;min-height:100vh}
+
+.main{
+  /* min-width:0 是必需的 —— flex 子项默认 min-width:auto，
+     里面的宽表格会把主区顶宽，横向滚动条就跑到 <body> 上去了。 */
+  flex:1; min-width:0; padding:22px 26px 40px;
+}
+.wrap{max-width:1320px;margin:0 auto}
+
+/* ---- 3. 侧边栏 ---------------------------------------------------------- */
+.side{
+  position:sticky; top:0; align-self:flex-start;
+  height:100vh; width:var(--side-w); flex:0 0 var(--side-w);
+  display:flex; flex-direction:column;
+  background:var(--panel); border-right:1px solid var(--border);
+  transition:width .18s ease, flex-basis .18s ease;
+  z-index:30;
+}
+html[data-side="mini"] .side{width:var(--side-mini);flex-basis:var(--side-mini)}
+
+.brand{
+  display:flex; align-items:center; gap:10px; height:60px;
+  padding:0 16px; text-decoration:none; color:var(--text);
+  border-bottom:1px solid var(--divider); flex:0 0 auto; overflow:hidden;
+}
+.brand img{width:28px;height:28px;flex:0 0 28px;display:block}
+.brand b{font-size:14px;font-weight:650;white-space:nowrap;display:block}
+.brand .tag{font-size:10px;color:var(--muted);white-space:nowrap;display:block}
+
+.nav{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}
+.side-foot{padding:8px;border-top:1px solid var(--divider);
+           display:flex;flex-direction:column;gap:2px}
+
+/* 导航项既有 <a> 也有 <button>，样式必须统一 */
+.nav-i{
+  display:flex; align-items:center; gap:10px;
+  width:100%; padding:9px 10px; border:none; border-radius:8px;
+  background:none; color:var(--text-2); font:inherit; font-size:13px; font-weight:500;
+  text-decoration:none; cursor:pointer; text-align:left; white-space:nowrap;
+  overflow:hidden;
+}
+.nav-i svg{width:18px;height:18px;flex:0 0 18px;transition:transform .18s ease}
+.nav-i.flip svg{transform:rotate(180deg)}   /* 收起态: 箭头指向展开方向 */
+/* hover 一律用主色高亮，不是压暗。
+ *
+ * **选择器必须带 .side 前缀**: 导航项里「收起」「退出登录」是 <button>，而
+ * 第 5 节的通用规则 button:hover:not(:disabled) 特异度是 (0,2,1)，比裸
+ * .nav-i:hover 的 (0,2,0) 高 —— 不加前缀的话这两个按钮 hover 会被刷成主色
+ * 实底，配上蓝色文字直接不可读。带上 .side 变成 (0,3,0) 才压得住。
+ * (.nav-i.danger:hover 本身就是两个类，所以退出按钮一直是对的。)
+ */
+.side .nav-i:hover{background:var(--blue-1);color:var(--blue)}
+/* 当前项和 hover 的底色/字色相同，只靠**加粗**区分(按要求不加左侧蓝条) */
+.nav-i.on{background:var(--blue-1);color:var(--blue);font-weight:600}
+.nav-i.danger:hover{background:var(--err-bg);color:var(--err)}
+
+/* 收起态: 只留图标。文字用 display:none 而不是 opacity —— 透明文字仍占位，
+   会把图标从 64px 的窄条里挤出去。 */
+html[data-side="mini"] .nav-i span,
+html[data-side="mini"] .brand .txt{display:none}
+html[data-side="mini"] .brand{justify-content:center;padding:0}
+html[data-side="mini"] .nav-i{justify-content:center;padding:9px 0}
+
+.backdrop{display:none}
+
+/* ---- 4. 页头 ------------------------------------------------------------ */
+.topbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.topbar h1{font-size:19px;margin:0;font-weight:650}
+.topbar .sub{color:var(--muted);font-size:12px}
+.hamb{
+  display:none; align-items:center; justify-content:center;
+  width:34px;height:34px;flex:0 0 34px;padding:0;
+  border:1px solid var(--border);border-radius:8px;background:var(--panel);
+  color:var(--text-2);cursor:pointer;
+}
+/* 同上: 不带 .topbar 前缀会被通用的 button:hover 刷成实底深蓝 */
+.topbar .hamb:hover{background:var(--blue-1);color:var(--blue);border-color:var(--blue-2)}
+.hamb svg{width:18px;height:18px}
+
+/* ---- 5. 工具条 / 表单控件 ----------------------------------------------- */
+.toolbar{
+  display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+  padding:12px 14px;margin-bottom:16px;box-shadow:var(--shadow);
+}
+label{font-size:12px;color:var(--muted)}
+.spacer{flex:1}
+.stamp{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+input[type=month],input[type=date],input[type=text],select{
+  font:inherit;font-size:13px;padding:6px 9px;color:var(--text);
+  border:1px solid var(--border);border-radius:7px;background:var(--panel);
+}
+select{min-width:210px;max-width:100%}
+/* 明细表的产品/地域筛选: 值可能很长(Elastic Compute Service)，但也不该
+   撑到 210px 把工具条挤成三行 */
+select.sm{min-width:auto;max-width:190px}
+input[type=month],input[type=date]{font-variant-numeric:tabular-nums}
+input[type=date]{min-width:138px}
+input:focus,select:focus{
+  outline:none;border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-1);
+}
+
+button{
+  font:inherit;font-size:13px;font-weight:550;padding:7px 15px;
+  border:1px solid transparent;border-radius:7px;cursor:pointer;
+  background:var(--blue);color:#fff;
+}
+/* 注意特异度 (0,2,1): 比 .someclass:hover 的 (0,2,0) 高。图标类按钮
+   (.nav-i / .hamb / .eye) 想自己定义 hover，选择器必须再带一个类做前缀，
+   否则会被这条刷成主色实底 —— 已经踩过一次。 */
+button:hover:not(:disabled){background:var(--blue-hover)}
+button:disabled{opacity:.55;cursor:progress}
+button.ghost{background:var(--panel);border-color:var(--border);color:var(--text-2);font-weight:500}
+button.ghost:hover:not(:disabled){background:var(--head);border-color:#c9cdd4;color:var(--text)}
+/* 待确认的危险动作(账号管理里点一次「停用」后的二次确认态) */
+button.ghost.danger{color:var(--err);border-color:#f0c4be}
+button.ghost.danger:hover:not(:disabled){background:var(--err-bg);border-color:var(--err);color:var(--err)}
+
+.check{display:inline-flex;align-items:center;gap:6px;font-size:12px;
+       color:var(--text-2);cursor:pointer;user-select:none}
+.check input{accent-color:var(--blue);width:14px;height:14px;margin:0}
+
+.search{position:relative;display:inline-flex;align-items:center}
+.search svg{position:absolute;left:9px;width:14px;height:14px;color:var(--muted);
+            pointer-events:none}
+.search input{padding-left:28px;width:210px}
+
+/* ---- 6. 统计卡 ---------------------------------------------------------- */
+.cards{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.card{
+  background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+  padding:13px 16px;min-width:170px;flex:1;box-shadow:var(--shadow);
+}
+.card .k{font-size:11px;color:var(--muted);letter-spacing:.3px}
+.card .v{font-size:21px;font-weight:600;margin-top:3px;font-variant-numeric:tabular-nums}
+.card.accent{background:var(--blue-1);border-color:var(--blue-2)}
+.card.accent .v{color:var(--blue)}
+
+/* 账号信息条(账单页顶部) */
+.acctbar{
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+  padding:12px 16px;margin-bottom:12px;box-shadow:var(--shadow);
+}
+.acctbar .who{font-size:15px;font-weight:650}
+.acctbar .kv{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* ---- 7. 表格 ------------------------------------------------------------ */
+.panel{
+  background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+  box-shadow:var(--shadow);overflow:hidden;
+}
+.scroll{overflow-x:auto}
+/* 表头固定必须让**这个容器**成为垂直滚动容器: 只写 overflow-x:auto 时
+   overflow-y 会计算成 auto，于是 sticky 锚在这个不滚动的容器上，页面往下滚
+   表头照样跑掉。给个 max-height，垂直滚动发生在面板内部，表头才真的粘住。 */
+.scroll.tall{max-height:min(68vh,660px);overflow:auto}
+table{border-collapse:separate;border-spacing:0;width:100%}
+th,td{padding:9px 13px;text-align:right;white-space:nowrap;
+      border-bottom:1px solid var(--divider)}
+thead th{
+  background:var(--head);font-size:12px;font-weight:600;color:var(--text-2);
+  border-bottom:1px solid var(--border);position:sticky;top:0;z-index:2;
+}
+th.l,td.l{text-align:left}
+tbody tr:nth-child(even):not(.errline):not(.noteline){background:var(--zebra)}
+tbody tr:hover:not(.errline):not(.noteline){background:var(--blue-1)}
+tbody tr:last-child td{border-bottom:none}
+tfoot td{font-weight:650;background:var(--head);
+         border-top:1px solid var(--border);border-bottom:none}
+
+/* 可排序表头 */
+th.sort{cursor:pointer;user-select:none}
+th.sort:hover{color:var(--blue);background:#f2f4f7}
+th.sort .ind{display:inline-block;margin-left:5px;font-size:10px;color:#c9cdd4}
+th.sort[aria-sort=ascending],th.sort[aria-sort=descending]{color:var(--blue)}
+th.sort[aria-sort=ascending] .ind,
+th.sort[aria-sort=descending] .ind{color:var(--blue)}
+th.sort[aria-sort=none] .ind::after{content:"\2195"}
+th.sort[aria-sort=ascending] .ind::after{content:"\2191"}
+th.sort[aria-sort=descending] .ind::after{content:"\2193"}
+
+.num{font-variant-numeric:tabular-nums}
+.acct{font-weight:550}
+/* 账号名是下钻入口。hover 不加下划线，只加深主色 */
+a.acct{color:var(--blue);text-decoration:none}
+a.acct:hover{color:var(--blue-hover)}
+.meta{font-size:11px;color:var(--muted);font-weight:400}
+.dim{color:var(--muted)}
+.bad{color:var(--err)}
+.good{color:var(--ok)}
+.warnval{color:var(--warn)}
+.strong{font-weight:600}
+.zero{color:var(--muted)}
+.skel{padding:40px;text-align:center;color:var(--muted)}
+
+.errline td{font-size:11px;color:var(--err);text-align:left;
+            padding:2px 13px 8px;background:var(--err-bg)}
+.noteline td{font-size:11px;color:var(--warn);text-align:left;
+             padding:2px 13px 8px;background:var(--warn-bg)}
+
+.pill{display:inline-block;font-size:11px;padding:2px 9px;border-radius:99px;
+      background:var(--ok-bg);color:var(--ok);font-weight:550}
+.pill.bad{background:var(--err-bg);color:var(--err)}
+.pill.warn{background:var(--warn-bg);color:var(--warn)}
+
+/* 已用占比条 */
+.bar{height:4px;background:var(--divider);border-radius:99px;margin-top:5px;overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--blue);border-radius:99px}
+
+/* 分页条 */
+.pager{
+  display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+  padding:10px 14px;border-top:1px solid var(--border);
+  font-size:12px;color:var(--muted);background:var(--panel);
+}
+.pager button{padding:4px 10px;font-size:12px}
+.pager select{min-width:auto;padding:4px 6px;font-size:12px}
+
+.errbox{
+  background:var(--err-bg);border:1px solid #f6b8b2;color:var(--err);
+  border-radius:var(--radius);padding:12px 14px;margin-bottom:16px;white-space:pre-wrap;
+}
+
+/* ---- 8. 日消费柱状图 ---------------------------------------------------- */
+.chart{
+  background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+  padding:14px 18px 10px;margin-bottom:16px;box-shadow:var(--shadow);
+  --grid:#eef0f3; --baseline:#dcdfe6;
+}
+.chart-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.chart-head h2{font-size:13px;margin:0;font-weight:650}
+.chart-head .hint{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.chart-body{display:flex;gap:8px}
+.yaxis{
+  flex:0 0 58px;height:140px;display:flex;flex-direction:column;
+  justify-content:space-between;text-align:right;
+  font-size:10px;line-height:1;color:var(--muted);font-variant-numeric:tabular-nums;
+}
+.plot-wrap{flex:1;min-width:0}
+.plot{
+  display:flex;align-items:flex-end;gap:2px;height:140px;
+  border-bottom:1px solid var(--baseline);
+  background:linear-gradient(var(--grid),var(--grid)) 0 50%/100% 1px no-repeat,
+             linear-gradient(var(--grid),var(--grid)) 0 0/100% 1px no-repeat;
+}
+.col{flex:1;height:100%;display:flex;align-items:flex-end;position:relative;min-width:0}
+.col .bar2{
+  width:100%;background:var(--blue);border-radius:3px 3px 0 0;
+  /* 非零值至少 2px —— 小额日子(实测 0.04)按比例只有 0.3px，
+     画出来和"零"完全看不出区别，那等于把数据弄丢了。零值仍然是零。 */
+  min-height:2px;
+}
+.col.zero .bar2{height:0;min-height:0}
+.col:hover .bar2{background:var(--blue-hover)}
+.col::after{content:'';position:absolute;inset:0}   /* 命中区比柱子宽，细柱也好悬停 */
+.col .tip{
+  display:none;position:absolute;bottom:100%;left:50%;transform:translateX(-50%);
+  margin-bottom:6px;white-space:nowrap;z-index:5;
+  background:var(--panel);border:1px solid var(--border);border-radius:7px;
+  padding:6px 10px;font-size:11px;line-height:1.55;color:var(--text);
+  box-shadow:0 4px 16px rgba(29,33,41,.16);
+}
+.col:hover .tip{display:block}
+/* 两端的列: 提示框贴边对齐，居中会溢出图表外 */
+.col:first-child .tip,.col:nth-child(2) .tip{left:0;transform:none}
+.col:last-child .tip,.col:nth-last-child(2) .tip{left:auto;right:0;transform:none}
+.xaxis{display:flex;gap:2px;margin-top:6px}
+.xaxis span{flex:1;text-align:center;font-size:10px;color:var(--muted);
+            font-variant-numeric:tabular-nums;min-width:0;overflow:hidden}
+
+/* ---- 9. 合计条 --------------------------------------------------------- */
+.totals{
+  display:flex;gap:16px;flex-wrap:wrap;align-items:center;
+  background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+  padding:12px 16px;margin-top:14px;font-size:13px;box-shadow:var(--shadow);
+}
+
+/* ---- 10. 提示条 / 停用行 ------------------------------------------------ */
+/* 不是错误、但必须让人看见的说明(比如"要看的账号已停用，已切到另一个") */
+.notebox{
+  background:var(--warn-bg);border:1px solid #f0d3a0;color:var(--warn);
+  border-radius:var(--radius);padding:10px 14px;margin-bottom:16px;font-size:12px;
+}
+/* 被软删除的账号行: 整行压灰，一眼能从启用的行里分出来 */
+tbody tr.off td{color:var(--muted)}
+tbody tr.off .acct{color:var(--muted)}
+
+/* ---- 11. 弹层(新增账号) ------------------------------------------------- */
+.modal{
+  position:fixed;inset:0;z-index:50;display:none;
+  align-items:center;justify-content:center;padding:24px;
+  background:rgba(29,33,41,.45);
+}
+.modal.open{display:flex}
+.modal-box{
+  background:var(--panel);border-radius:14px;width:100%;max-width:420px;
+  box-shadow:0 20px 60px rgba(29,33,41,.28);overflow:hidden;
+}
+.modal-head{
+  display:flex;align-items:center;gap:10px;padding:15px 18px;
+  border-bottom:1px solid var(--divider);
+}
+.modal-head h2{margin:0;font-size:16px;font-weight:650}
+.modal-x{
+  margin-left:auto;width:28px;height:28px;padding:0;border:none;background:none;
+  display:flex;align-items:center;justify-content:center;
+  color:var(--muted);cursor:pointer;border-radius:7px;font-size:20px;line-height:1;
+}
+/* 带 .modal-head 前缀: 见第 5 节 button:hover 那条注释 */
+.modal-head .modal-x:hover{color:var(--blue);background:var(--blue-1)}
+.modal-body{padding:16px 18px;display:flex;flex-direction:column;gap:13px}
+.field label{display:block;font-size:12px;color:var(--text-2);margin-bottom:5px}
+.field input{width:100%;font-size:14px;padding:9px 11px}
+.field .hint{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.6}
+.modal-foot{
+  display:flex;gap:10px;justify-content:flex-end;align-items:center;
+  padding:13px 18px;border-top:1px solid var(--divider);background:var(--head);
+}
+.modal-foot .spacer{flex:1}
+
+/* ---- 12. 窄屏 ----------------------------------------------------------- */
+@media (max-width:900px){
+  .side{
+    position:fixed;left:0;top:0;transform:translateX(-100%);
+    transition:transform .2s ease;box-shadow:0 8px 30px rgba(29,33,41,.18);
+  }
+  /* 抽屉展开时一律完整宽度 —— 手机上只剩图标的窄条毫无意义 */
+  .side,html[data-side="mini"] .side{width:var(--side-w);flex-basis:var(--side-w)}
+  body.side-open .side{transform:none}
+  html[data-side="mini"] .nav-i span,html[data-side="mini"] .brand .txt{display:block}
+  html[data-side="mini"] .brand{justify-content:flex-start;padding:0 16px}
+  html[data-side="mini"] .nav-i{justify-content:flex-start;padding:9px 10px}
+  .backdrop{position:fixed;inset:0;background:rgba(29,33,41,.4);z-index:25}
+  body.side-open .backdrop{display:block}
+  .hamb{display:inline-flex}
+  .main{padding:16px 14px 32px}
+  /* 170px 的 min-width 在 375px 屏上只能塞一张卡，四张卡就要滚四屏 */
+  .card{min-width:140px}
+  .side-foot .collapse{display:none}   /* 抽屉模式下"收起"没意义，点遮罩即关 */
+  .search input{width:150px}
+  select{min-width:150px}
+}

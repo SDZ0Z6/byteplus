@@ -84,3 +84,177 @@ function defaultPeriod(){
 
 // 账期格式校验，前端也挡一道，省得拿脏参数去打接口
 const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+// ---- 外壳(侧边栏) --------------------------------------------------------
+// 侧边栏由 JS 渲染而不是两个页面各写一份 HTML: 导航项、退出按钮的显示条件、
+// 收起逻辑都得两页一致，存两份早晚有一份漏改(common.js 开头那段注释同理)。
+//
+// 收起状态存 localStorage(不是 sessionStorage) —— 这是界面偏好，不是凭据，
+// 关标签页后应当留着。**读取必须在 <head> 里的内联脚本完成**，等到这里再读
+// 就已经画过一帧展开态了，切页时侧边栏会闪一下。
+const SIDE_KEY = 'bp_side';
+
+const ICON = {
+  overview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    + ' stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
+    + '<rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/>'
+    + '<rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/>'
+    + '<rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/>'
+    + '<rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>',
+  bill: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    + ' stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M6 2.75h8L19 7.5V20.5a.75.75 0 0 1-.75.75H6a.75.75 0 0 1-.75-.75'
+    + 'V3.5A.75.75 0 0 1 6 2.75Z"/><path d="M13.75 2.9V7.5H18.6"/>'
+    + '<path d="M8.5 12.5h7M8.5 16.5h4.5"/></svg>',
+  accounts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    + ' stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
+    + '<circle cx="9.25" cy="8" r="3.25"/>'
+    + '<path d="M3.5 19.75c0-3.18 2.58-5.5 5.75-5.5s5.75 2.32 5.75 5.5"/>'
+    + '<path d="M16.25 5.4a3.25 3.25 0 0 1 0 5.2"/>'
+    + '<path d="M18 14.9c1.55.78 2.5 2.15 2.5 3.85"/></svg>',
+  chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    + ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M14.5 6.5 9 12l5.5 5.5"/></svg>',
+  logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    + ' stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M14.5 4.25h3.25A1 1 0 0 1 18.75 5.25v13.5a1 1 0 0 1-1 1H14.5"/>'
+    + '<path d="M10 8.25 6.25 12 10 15.75"/><path d="M6.5 12h8"/></svg>',
+  menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    + ' stroke-width="1.8" stroke-linecap="round">'
+    + '<path d="M4 7h16M4 12h16M4 17h16"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    + ' stroke-width="1.8" stroke-linecap="round">'
+    + '<circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 4.5 4.5"/></svg>'
+};
+
+function sideMode(){
+  return document.documentElement.dataset.side === 'mini' ? 'mini' : 'full';
+}
+
+function setSideMode(mode){
+  document.documentElement.dataset.side = mode;
+  try{ localStorage.setItem(SIDE_KEY, mode); }catch(e){ /* 隐私模式下失败无所谓 */ }
+  const btn = document.getElementById('sideToggle');
+  if(btn){
+    const label = btn.querySelector('span');
+    if(label) label.textContent = (mode === 'mini' ? '展开' : '收起');
+    btn.classList.toggle('flip', mode === 'mini');
+    btn.title = (mode === 'mini' ? '展开侧边栏' : '收起侧边栏');
+  }
+}
+
+// active: 'overview' | 'bill'
+function initShell(active){
+  const side = document.getElementById('side');
+  if(!side) return;
+
+  // title 不只是悬浮提示: 收起态下 <span> 是 display:none，隐藏文字不计入
+  // 无障碍名，只剩图标的按钮就变成"没有名字的按钮"了。title 兜住这个。
+  const item = (key, href, text, icon) =>
+      '<a class="nav-i' + (key === active ? ' on' : '') + '" href="' + href
+    + '" title="' + text + '">' + icon + '<span>' + text + '</span></a>';
+
+  // 回总览时带 ?restore=1: 总览页据此用 sessionStorage 里的快照渲染，
+  // 而不是把所有账号的接口重查一遍(它自己那套返回逻辑就认这个标记)。
+  const home = (active === 'overview') ? '/' : '/?restore=1';
+
+  side.innerHTML =
+      '<a class="brand" href="' + home + '">'
+    +   '<img src="/static/Kuromi_Icon_50px_20260828.png" width="28" height="28" alt="">'
+    +   '<span class="txt"><b>Kuromi 平台</b>'
+    +     '<span class="tag">BytePlus 授信看板</span></span>'
+    + '</a>'
+    + '<nav class="nav">'
+    +   item('overview', home, '总览', ICON.overview)
+    +   item('bill', '/bill.html', '账单', ICON.bill)
+    +   item('accounts', '/accounts.html', '账号管理', ICON.accounts)
+    + '</nav>'
+    + '<div class="side-foot">'
+    +   '<button class="nav-i collapse" id="sideToggle" type="button">'
+    +     ICON.chevron + '<span>收起</span></button>'
+    // 只有确实带着凭据时才给退出按钮(未启用验证时没有可退的东西)
+    +   (sessionStorage.getItem(AUTH_KEY)
+        ? '<button class="nav-i danger" id="logout" type="button" title="退出登录">'
+          + ICON.logout + '<span>退出登录</span></button>' : '')
+    + '</div>';
+
+  setSideMode(sideMode());          // 同步按钮文案/箭头方向
+
+  document.getElementById('sideToggle').addEventListener('click', () =>
+    setSideMode(sideMode() === 'mini' ? 'full' : 'mini'));
+
+  const out = document.getElementById('logout');
+  if(out) out.addEventListener('click', toLogin);
+
+  // 窄屏: 侧边栏变抽屉，汉堡按钮开、遮罩/Esc 关
+  const openDrawer = on => document.body.classList.toggle('side-open', on);
+  const hamb = document.getElementById('hamb');
+  if(hamb){
+    hamb.innerHTML = ICON.menu;
+    hamb.addEventListener('click', () =>
+      openDrawer(!document.body.classList.contains('side-open')));
+  }
+  const back = document.getElementById('backdrop');
+  if(back) back.addEventListener('click', () => openDrawer(false));
+  document.addEventListener('keydown', ev => {
+    if(ev.key === 'Escape') openDrawer(false);
+  });
+}
+
+// ---- 总览页快照 ----------------------------------------------------------
+// 总览页离开前把数据存进 sessionStorage，返回时直接拿它渲染(不重查所有账号)。
+// 常量放在这里而不是 index.html 里，是因为**账号管理页也必须能把它清掉** ——
+// 改完账号状态后那份快照就是错的，不清掉的话点「总览」会看到停用没生效。
+const SNAP_KEY = 'bp_overview_snap';
+
+function clearOverviewSnapshot(){
+  try{ sessionStorage.removeItem(SNAP_KEY); }catch(e){ /* 隐私模式下忽略 */ }
+}
+
+// ---- 写操作 --------------------------------------------------------------
+// 只有账号管理在用。没有 CSRF 令牌是有意的: 凭据走 Authorization 头而不是
+// cookie，浏览器不会替第三方站点自动带上，跨站请求根本过不了认证。
+async function postJSON(path, body){
+  const res = await fetch(apiURL(path), {
+    method: 'POST',
+    headers: Object.assign({'Content-Type': 'application/json'}, authHeader()),
+    cache: 'no-store',
+    body: JSON.stringify(body)
+  });
+  if(res.status === 401){ toLogin(); throw new Error('登录已失效'); }
+  let data = {};
+  try{ data = await res.json(); }catch(e){ /* 非 JSON 响应，下面按状态码报 */ }
+  if(!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+// ---- 表格排序 ------------------------------------------------------------
+function isEmptyVal(v){ return v === null || v === undefined || v === ''; }
+
+// 稳定排序。两条规则值得说明:
+//   1. 空值恒定垫底，**不随升降翻转** —— 把"没有单价"当 0 会让它插进最便宜
+//      那一档里，看起来像数据算错了。
+//   2. 同值保持原顺序(拿原下标兜底)，否则反复点表头行会乱跳。
+function sortRows(rows, get, numeric, dir){
+  return rows
+    .map((r, i) => ({r: r, i: i}))
+    .sort((x, y) => {
+      const a = get(x.r), b = get(y.r);
+      const ea = isEmptyVal(a), eb = isEmptyVal(b);
+      if(ea !== eb) return ea ? 1 : -1;
+      if(!ea){
+        let c;
+        if(numeric){
+          const na = Number(a), nb = Number(b);
+          // 非数字(接口偶尔给 "按量" 之类)退化成文本比，别让 NaN 把顺序搅乱
+          if(isFinite(na) && isFinite(nb)) c = na === nb ? 0 : (na < nb ? -1 : 1);
+          else c = String(a).localeCompare(String(b), 'zh');
+        }else{
+          c = String(a).localeCompare(String(b), 'zh');
+        }
+        if(c) return dir < 0 ? -c : c;
+      }
+      return x.i - y.i;
+    })
+    .map(o => o.r);
+}

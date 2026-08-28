@@ -3,166 +3,106 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BytePlus Kuromi 平台</title>
+<title>授信总览 · BytePlus Kuromi 平台</title>
+<link rel="icon" href="/static/Kuromi_Icon_50px_20260828.png">
+<link rel="stylesheet" href="/app.css">
+<!-- 侧边栏收起状态必须在首帧之前定好，否则切页时侧边栏会先画成展开态再抽回去 -->
+<script>
+try{
+  document.documentElement.dataset.side =
+    (localStorage.getItem('bp_side') === 'mini') ? 'mini' : 'full';
+}catch(e){ document.documentElement.dataset.side = 'full'; }
+</script>
 <style>
-  :root{
-    --bg:#f6f7f9; --panel:#fff; --border:#e3e6ea; --text:#1c1f23; --muted:#6b7280;
-    --accent:#2563eb; --ok:#128a52; --warn:#b45309; --err:#c2261a;
-    --err-bg:#fdf2f1; --head:#f0f2f5; --zebra:#fafbfc; --bar:#dfe3e8;
-  }
-  @media (prefers-color-scheme:dark){
-    :root{
-      --bg:#15181c; --panel:#1c2025; --border:#2e343b; --text:#e6e9ed; --muted:#98a1ac;
-      --accent:#5b9cff; --ok:#3ecf8e; --warn:#e0a049; --err:#ff6b5e;
-      --err-bg:#2a1c1a; --head:#22272d; --zebra:#1f2429; --bar:#333a42;
-    }
-  }
-  *{box-sizing:border-box}
-  body{
-    margin:0; padding:22px; background:var(--bg); color:var(--text);
-    font:14px/1.5 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;
-  }
-  .wrap{max-width:1180px;margin:0 auto}
-  header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:18px}
-  h1{font-size:20px;margin:0;font-weight:650}
-  .sub{color:var(--muted);font-size:12px}
-  .toolbar{
-    display:flex;gap:10px;align-items:center;flex-wrap:wrap;
-    background:var(--panel);border:1px solid var(--border);border-radius:10px;
-    padding:12px 14px;margin-bottom:16px;
-  }
-  label{font-size:12px;color:var(--muted)}
-  input[type=month]{
-    font:inherit;padding:6px 8px;border:1px solid var(--border);border-radius:6px;
-    background:var(--bg);color:var(--text);
-  }
-  button{
-    font:inherit;font-weight:550;padding:7px 15px;border-radius:6px;cursor:pointer;
-    border:1px solid transparent;background:var(--accent);color:#fff;
-  }
-  button:hover:not(:disabled){filter:brightness(1.08)}
-  button:disabled{opacity:.55;cursor:progress}
-  button.ghost{background:transparent;border-color:var(--border);color:var(--muted);font-weight:500}
-  .spacer{flex:1}
-  .stamp{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
-
-  .cards{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
-  .card{
-    background:var(--panel);border:1px solid var(--border);border-radius:10px;
-    padding:12px 16px;min-width:168px;flex:1;
-  }
-  .card .k{font-size:11px;color:var(--muted);letter-spacing:.3px}
-  .card .v{font-size:21px;font-weight:600;margin-top:3px;font-variant-numeric:tabular-nums}
-
-  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow-x:auto}
-  table{border-collapse:collapse;width:100%;min-width:820px}
-  th,td{padding:10px 14px;text-align:right;border-bottom:1px solid var(--border);white-space:nowrap}
-  thead th{background:var(--head);font-size:12px;font-weight:600;color:var(--muted)}
-  th.l,td.l{text-align:left}
-  tbody tr:nth-child(even of :not(.errline)){background:var(--zebra)}
-  .num{font-variant-numeric:tabular-nums}
-  .acct{font-weight:550}
-  .meta{font-size:11px;color:var(--muted);font-weight:400}
-  .dim{color:var(--muted)}
-  .bad{color:var(--err)}
-  .warnval{color:var(--warn)}
-  .strong{font-weight:600}
-  .pill{
-    display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;
-    background:rgba(18,138,82,.12);color:var(--ok);
-  }
-  .pill.bad{background:rgba(194,38,26,.12);color:var(--err)}
-  .pill.warn{background:rgba(180,83,9,.14);color:var(--warn)}
-  .errbox{
-    background:var(--err-bg);border:1px solid var(--err);color:var(--err);
-    border-radius:8px;padding:12px 14px;margin-bottom:16px;white-space:pre-wrap;
-  }
-  .errline td{font-size:11px;color:var(--err);text-align:left;padding:2px 14px 8px;background:none}
-  .noteline td{font-size:11px;color:var(--warn);text-align:left;padding:2px 14px 8px;background:none}
-  .bar{height:4px;background:var(--bar);border-radius:99px;margin-top:5px;overflow:hidden}
-  .bar>i{display:block;height:100%;background:var(--accent);border-radius:99px}
-  tfoot td{font-weight:600;background:var(--head)}
-  footer{margin-top:14px;font-size:11px;color:var(--muted);line-height:1.75}
-  code{background:var(--head);padding:1px 4px;border-radius:3px}
-  .skel{padding:36px;text-align:center;color:var(--muted)}
-
-  /* 明细入口：真链接(同页签跳 /detail.html)，不是弹层 */
-  a.drill{
-    display:inline-block;text-decoration:none;white-space:nowrap;
-    border:1px solid var(--border);border-radius:6px;padding:4px 10px;
-    font-size:12px;font-weight:500;color:var(--accent);
-  }
-  a.drill:hover{background:var(--head)}
-
+  /* 总览表窄一些，给账号列留足空间即可 */
+  #tbl{min-width:760px}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="app">
 
-  <header>
-    <h1>BytePlus Kuromi 平台</h1>
-    <span class="sub">原授信额度 · 授信余额 · 已用 · 消费（全部美金 USD）</span>
-  </header>
+  <aside class="side" id="side"></aside>
+  <div class="backdrop" id="backdrop"></div>
 
-  <div class="toolbar">
-    <label for="period">账期</label>
-    <input type="month" id="period">
-    <button id="refresh">刷新</button>
-    <span class="spacer"></span>
-    <span class="stamp" id="stamp"></span>
-    <button class="ghost" id="logout" hidden>退出登录</button>
-  </div>
+  <main class="main"><div class="wrap">
 
-  <div id="err"></div>
-  <div class="cards" id="cards"></div>
+    <div class="topbar">
+      <button class="hamb" id="hamb" type="button" aria-label="菜单"></button>
+      <h1>授信总览</h1>
+      <span class="sub">原授信额度 · 授信余额 · 已用 · 当期消费（全部美金 USD）</span>
+    </div>
 
-  <div class="panel">
-    <table>
-      <thead>
-        <tr>
-          <th class="l">账号</th>
-          <th>原授信额度</th>
-          <th>授信余额</th>
-          <th>已用（累计消费）</th>
-          <th id="thPeriod">当期消费</th>
-          <th>状态</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody id="rows">
-        <tr><td colspan="7" class="skel">加载中…</td></tr>
-      </tbody>
-      <tfoot id="foot"></tfoot>
-    </table>
-  </div>
+    <div class="toolbar">
+      <label for="period">账期</label>
+      <input type="month" id="period">
+      <button id="refresh">刷新</button>
+      <span class="spacer"></span>
+      <span class="stamp" id="stamp"></span>
+    </div>
 
-  <footer id="notes"></footer>
+    <div id="err"></div>
+    <div class="cards" id="cards"></div>
 
+    <div class="panel"><div class="scroll">
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th class="l">账号</th>
+            <th>原授信额度</th>
+            <th>授信余额</th>
+            <th>已用（累计消费）</th>
+            <th id="thPeriod">当期消费</th>
+            <th>状态</th>
+          </tr>
+        </thead>
+        <tbody id="rows">
+          <tr><td colspan="6" class="skel">加载中…</td></tr>
+        </tbody>
+        <tfoot id="foot"></tfoot>
+      </table>
+    </div></div>
+
+  </div></main>
 </div>
-
 
 <script src="/common.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 
+initShell('overview');
+
 function renderCards(d){
   const t = d.totals || {};
   const cur = ' <span class="dim" style="font-size:12px;font-weight:400">'+esc(d.currency)+'</span>';
   const items = [
-    ['账号数', String(d.account_count) + (d.error_count ? ' <span class="bad" style="font-size:12px">'+d.error_count+' 异常</span>' : '')],
-    ['原授信额度合计', money(t.granted, {atLeast: d.totals_partial}) + cur],
-    ['授信余额合计', money(t.balance) + cur],
-    ['已用合计', money(t.used) + cur],
-    [esc(d.period) + ' 消费合计', money(t.selected_spend) + cur],
+    ['账号数', String(d.account_count) + (d.error_count ? ' <span class="bad" style="font-size:12px">'+d.error_count+' 异常</span>' : ''), ''],
+    ['原授信额度合计', money(t.granted, {atLeast: d.totals_partial}) + cur, ''],
+    ['授信余额合计', money(t.balance) + cur, ''],
+    ['已用合计', money(t.used) + cur, ''],
+    [esc(d.period) + ' 消费合计', money(t.selected_spend) + cur, ' accent'],
   ];
-  $('cards').innerHTML = items.map(([k,v]) =>
-    '<div class="card"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>').join('');
+  $('cards').innerHTML = items.map(([k,v,cls]) =>
+    '<div class="card'+cls+'"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>').join('');
+}
+
+// 账单页链接。带上当前账期，这样账单页打开就是同一个月、同一个账号。
+function billHref(uid){
+  const p = $('period').value || defaultPeriod();
+  return '/bill.html?uid=' + encodeURIComponent(uid)
+       + '&period=' + encodeURIComponent(p);
 }
 
 function renderRows(d){
   const tb = $('rows');
   if(!d.accounts.length){
-    tb.innerHTML = '<tr><td colspan="7" class="skel">cred.xlsx 里没有账号</td></tr>';
+    // 「表里没账号」和「账号都被停用了」要分开说 —— 下一步动作完全不同:
+    // 一个是去填 cred.xlsx，一个是去账号管理页点启用
+    tb.innerHTML = '<tr><td colspan="6" class="skel">'
+      + (d.disabled_count
+          ? '全部 ' + d.disabled_count + ' 个账号都已停用 —— '
+            + '到 <a href="/accounts.html">账号管理</a> 里可以重新启用'
+          : 'cred.xlsx 里没有账号')
+      + '</td></tr>';
     return;
   }
   let html = '';
@@ -173,8 +113,11 @@ function renderRows(d){
     const pct = (isFinite(granted) && granted > 0 && isFinite(used))
       ? Math.max(0, Math.min(100, used / granted * 100)) : null;
 
+    // 账号名即下钻入口: 点进去是该账号该账期的账单页
     html += '<tr>'
-      + '<td class="l"><div class="acct">' + esc(a.email || '(无邮箱)') + '</div>'
+      + '<td class="l">'
+      +   '<a class="acct" href="' + billHref(a.uid) + '">'
+      +     esc(a.email || '(无邮箱)') + '</a>'
       +   '<div class="meta">UID ' + esc(a.uid) + ' · ' + esc(a.ak_masked) + '</div></td>';
 
     // 原授信额度（推算值）
@@ -199,7 +142,7 @@ function renderRows(d){
               : '')
           + '</td>';
 
-    // 当期消费 —— 纯展示，不做跳转；下钻统一走行尾的「明细 ›」按钮
+    // 当期消费 —— 纯展示，不做跳转
     if(a.selected_spend_error){
       html += '<td class="bad">查询失败</td>';
     }else{
@@ -214,7 +157,6 @@ function renderRows(d){
         ? (a.granted_partial ? '<span class="pill warn">部分</span>'
                              : '<span class="pill">正常</span>')
         : '<span class="pill bad">异常</span>') + '</td>'
-      + '<td><a class="drill" href="' + detailHref(a.uid) + '">明细 ›</a></td>'
       + '</tr>';
 
     const errs = [
@@ -223,10 +165,10 @@ function renderRows(d){
       a.current_spend_error && '当月消费: ' + errText(a.current_spend_error),
     ].filter(Boolean);
     if(errs.length){
-      html += '<tr class="errline"><td colspan="7">' + errs.join('<br>') + '</td></tr>';
+      html += '<tr class="errline"><td colspan="6">' + errs.join('<br>') + '</td></tr>';
     }
     if(a.notes && a.notes.length){
-      html += '<tr class="noteline"><td colspan="7">' + a.notes.map(esc).join('<br>') + '</td></tr>';
+      html += '<tr class="noteline"><td colspan="6">' + a.notes.map(esc).join('<br>') + '</td></tr>';
     }
   }
   tb.innerHTML = html;
@@ -237,41 +179,22 @@ function renderRows(d){
     + '<td>' + money(t.balance) + '</td>'
     + '<td>' + money(t.used) + '</td>'
     + '<td>' + money(t.selected_spend) + '</td>'
-    + '<td></td><td></td></tr>';
-}
-
-function renderNotes(d){
-  const backs = d.accounts.map(a => a.scanned_back_to).filter(Boolean).sort();
-  $('notes').innerHTML =
-      '<b>原授信额度是推算值</b>：BytePlus 接口没有这个字段，用 '
-    + '<code>授信余额 + 累计消费</code> 算出来（已用真实数据核对：'
-    + '188.71 + 11.29 = 200.00、999.92 + 0.08 = 1000.00）。'
-    + '授信余额是按消费扣减的，所以「已用」就等于累计消费。<br>'
-    + '<b>精度</b>：额度扣减比账单接口略有延迟，所以推算出的原授信额度可能在几分钱范围内波动'
-    + '（实测同一账号在 1538.00 / 1538.02 之间跳）。真实授信通常是整数，可据此判断。<br>'
-    + '<b>累计消费的范围</b>：从当月往前逐月累加，连续无消费的月份达到设定数量即停'
-    + (backs.length ? '（本次最早扫到 ' + esc(backs[0]) + '）' : '')
-    + '。已结账的月份会永久缓存，所以每次刷新只重新查当月。'
-    + '若某个账期取数失败，该账号的原授信额度会标成 <code>≥</code> 下限值，不会把失败当成 0。<br>'
-    + '<b>币种</b>：按需求统一按 ' + esc(d.currency) + ' 显示。<br>'
-    + '<b>模式</b>：当月数据每次刷新都实时查 BytePlus API。账号来自 <code>cred.xlsx</code>，'
-    + '改完点刷新即可生效（无需重启）。';
+    + '<td></td></tr>';
 }
 
 function applyData(data){
   $('thPeriod').textContent = data.period + ' 消费';
   renderCards(data);
   renderRows(data);
-  renderNotes(data);
 }
 
 // ---- 返回总览时不重查 ------------------------------------------------------
-// 从明细页按返回键回来，本不该重新查一遍所有账号的接口。
+// 从账单页按返回键回来，本不该重新查一遍所有账号的接口。
 // 首选是浏览器 bfcache(整页从内存恢复)，服务端已把页面文档的 Cache-Control
 // 从 no-store 改成 no-cache 来保住它 —— 但 bfcache 还会被"附加了调试器"、
 // 内存压力、超时等因素取消，不能指望。所以这里再兜一层:
 // 离开前把总览数据存进 sessionStorage，返回导航时直接拿它渲染。
-const SNAP_KEY = 'bp_overview_snap';
+// SNAP_KEY 在 common.js 里 —— 账号管理页改完账号后也要清它
 const SNAP_TTL_MS = 10 * 60 * 1000;   // 超过 10 分钟就宁可重查
 
 function saveSnapshot(data){
@@ -288,13 +211,6 @@ function loadSnapshot(){
   }catch(e){ return null; }
 }
 
-// 明细页链接。带上当前账期，这样详情页打开就是同一个月。
-function detailHref(uid){
-  const p = $('period').value || defaultPeriod();
-  return '/detail.html?uid=' + encodeURIComponent(uid)
-       + '&period=' + encodeURIComponent(p);
-}
-
 async function load(){
   const btn = $('refresh');
   btn.disabled = true;
@@ -304,13 +220,8 @@ async function load(){
 
   const period = $('period').value || defaultPeriod();
   try{
-    // 若页面是用 http://user:pass@host/ 这种带凭据的地址打开的(Basic Auth 下
-    // 有人会这么存书签)，相对 URL 会继承这段凭据，而 fetch() 拒绝带凭据的 URL。
-    // 这里显式清掉。
-    const u = new URL('/api/accounts', location.href);
-    u.username = ''; u.password = '';
-    u.searchParams.set('period', period);
-    const res = await fetch(u.toString(), {cache:'no-store', headers: authHeader()});
+    const res = await fetch(apiURL('/api/accounts', {period: period}),
+                            {cache:'no-store', headers: authHeader()});
 
     // 未登录 / 凭据失效 -> 回登录页。凭据只在浏览器里，服务端无 session。
     if(res.status === 401){ return toLogin(); }
@@ -323,7 +234,7 @@ async function load(){
                            + ' · 耗时 ' + data.elapsed_ms + ' ms';
   }catch(e){
     $('err').innerHTML = '<div class="errbox">加载失败: ' + esc(e.message) + '</div>';
-    $('rows').innerHTML = '<tr><td colspan="7" class="skel">—</td></tr>';
+    $('rows').innerHTML = '<tr><td colspan="6" class="skel">—</td></tr>';
     $('foot').innerHTML = '';
     $('cards').innerHTML = '';
     $('stamp').textContent = '';
@@ -338,16 +249,9 @@ $('period').max = defaultPeriod();
 $('refresh').addEventListener('click', load);
 $('period').addEventListener('change', load);
 
-// 只有确实带着凭据时才显示退出按钮(未启用验证时不显示)
-if(sessionStorage.getItem(AUTH_KEY)){
-  const btn = $('logout');
-  btn.hidden = false;
-  btn.addEventListener('click', toLogin);
-}
-
-// 什么时候算"从明细页回来"，可以直接用快照而不重查:
+// 什么时候算"从账单页回来"，可以直接用快照而不重查:
 //   1. 浏览器返回/前进键 -> navigation.type === 'back_forward'
-//   2. 明细页的「返回总览」链接 -> 那是**前进导航**(type = navigate)，
+//   2. 账单页的「返回总览」链接 -> 那是**前进导航**(type = navigate)，
 //      拿不到上面那条路径，所以链接上带了 ?restore=1 作为显式标记。
 //      (本想用 document.referrer 判断来源，但响应头设了 Referrer-Policy:
 //       no-referrer，它恒为空，用不了。)

@@ -1,72 +1,136 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-side="full">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BytePlus Kuromi 平台</title>
+<title>登录 · BytePlus Kuromi 平台</title>
+<link rel="icon" href="/static/Kuromi_Icon_50px_20260828.png">
+<link rel="stylesheet" href="/app.css">
 <style>
-  :root{
-    --bg:#f6f7f9; --panel:#fff; --border:#e3e6ea; --text:#1c1f23; --muted:#6b7280;
-    --accent:#2563eb; --err:#c2261a; --err-bg:#fdf2f1;
+  /* 登录页是独立布局(没有侧边栏)，只借 app.css 的变量和控件样式。 */
+  .split{display:flex;min-height:100vh}
+
+  /* 左: 品牌 + 视觉。浅蓝白渐变，和主色 #1664ff 同一冷色调。 */
+  .hero{
+    flex:1 1 54%;min-width:0;padding:48px 4.5vw;
+    display:flex;flex-direction:column;justify-content:center;gap:34px;
+    background:linear-gradient(155deg,#f8faff 0%,#e9f0ff 52%,#f3f1ff 100%);
+    border-right:1px solid var(--border);
   }
-  @media (prefers-color-scheme:dark){
-    :root{
-      --bg:#15181c; --panel:#1c2025; --border:#2e343b; --text:#e6e9ed; --muted:#98a1ac;
-      --accent:#5b9cff; --err:#ff6b5e; --err-bg:#2a1c1a;
-    }
+  .hero-top{display:flex;align-items:center;gap:14px}
+  .hero-top img{width:56px;height:56px;display:block}
+  .hero h2{margin:0;font-size:22px;font-weight:700;letter-spacing:.2px}
+  .hero p{margin:5px 0 0;font-size:13px;color:var(--text-2)}
+  .hero .accent{color:var(--blue)}
+  .shot{
+    width:100%;max-width:560px;height:auto;display:block;border-radius:16px;
+    box-shadow:0 18px 48px rgba(22,100,255,.14);
   }
-  *{box-sizing:border-box}
-  body{
-    margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-    background:var(--bg); color:var(--text); padding:24px;
-    font:14px/1.5 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+
+  /* 右: 表单 */
+  .formside{
+    flex:1 1 46%;min-width:0;display:flex;align-items:center;justify-content:center;
+    background:var(--panel);padding:40px 24px;
   }
-  .card{
-    background:var(--panel); border:1px solid var(--border); border-radius:12px;
-    padding:30px 32px; width:100%; max-width:360px;
+  .card{width:100%;max-width:340px}
+  .form-brand{display:none;align-items:center;gap:10px;margin-bottom:26px}
+  .form-brand img{width:30px;height:30px;display:block}
+  .form-brand b{font-size:15px;font-weight:650}
+  .card h1{margin:0 0 28px;font-size:26px;font-weight:700;text-align:center}
+
+  .card label{display:block;font-size:12px;color:var(--text-2);margin-bottom:6px}
+  .card input{
+    width:100%;font:inherit;font-size:14px;padding:10px 12px;margin-bottom:18px;
+    border:1px solid var(--border);border-radius:8px;background:var(--panel);
+    color:var(--text);
   }
-  h1{font-size:19px; margin:0 0 4px; font-weight:650}
-  .sub{color:var(--muted); font-size:12px; margin-bottom:22px}
-  label{display:block; font-size:12px; color:var(--muted); margin-bottom:5px}
-  input{
-    width:100%; font:inherit; padding:9px 11px; margin-bottom:15px;
-    border:1px solid var(--border); border-radius:7px;
-    background:var(--bg); color:var(--text);
+  /* focus 态必须写在这里且带 .card 前缀: app.css 的 input:focus 是 (0,1,1)，
+     和 .card input 的 (0,1,1) 打平，而本页的 <style> 在 app.css 之后 ——
+     平手时后者胜，边框会一直是灰的，focus 只剩一层很淡的光晕。 */
+  .card input:focus{
+    outline:none;border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-1);
   }
-  input:focus{outline:2px solid var(--accent); outline-offset:-1px; border-color:transparent}
-  button{
-    width:100%; font:inherit; font-weight:600; padding:10px; margin-top:3px;
-    border:none; border-radius:7px; background:var(--accent); color:#fff; cursor:pointer;
+  /* 外边距挪到容器上，眼睛按钮才能用 top/bottom:0 撑满输入框高度并居中 ——
+     否则要按 padding 手算一个 top 值，改字号就歪。 */
+  .pw{position:relative;margin-bottom:18px}
+  .pw input{margin-bottom:0;padding-right:44px}
+  .eye{
+    position:absolute;top:0;bottom:0;right:6px;width:32px;padding:0;
+    display:flex;align-items:center;justify-content:center;
+    background:none;border:none;color:var(--muted);cursor:pointer;
   }
-  button:hover:not(:disabled){filter:brightness(1.08)}
-  button:disabled{opacity:.55; cursor:progress}
+  /* 高亮，不压暗。带 .pw 前缀是必需的 —— app.css 里通用的
+     button:hover:not(:disabled) 特异度 (0,2,1) 比 .eye:hover 的 (0,2,0) 高，
+     不加前缀这个图标按钮 hover 会顶着一块深蓝实底。 */
+  .pw .eye:hover{color:var(--blue);background:none}
+  .pw .eye:active{color:var(--blue-hover)}
+  .eye svg{width:17px;height:17px}
+
+  .card button[type=submit]{
+    width:100%;font-size:15px;font-weight:600;padding:11px;margin-top:6px;
+    border-radius:8px;
+  }
   .msg{
-    display:none; background:var(--err-bg); border:1px solid var(--err); color:var(--err);
-    border-radius:7px; padding:9px 11px; font-size:12px; margin-bottom:15px;
+    display:none;background:var(--err-bg);border:1px solid #f6b8b2;color:var(--err);
+    border-radius:8px;padding:9px 12px;font-size:12px;margin-bottom:18px;
   }
   .msg.show{display:block}
-  .note{margin-top:18px; font-size:11px; color:var(--muted); line-height:1.7}
+
+  /* 窄屏: 隐藏视觉块，品牌改到表单顶部 —— 那张拼图在手机上占满整屏
+     却还要往下滚才能看见输入框，登录页最该做的是让人立刻能输入。 */
+  @media (max-width:880px){
+    .hero{display:none}
+    .form-brand{display:flex}
+    .formside{align-items:flex-start;padding-top:14vh}
+    .card h1{text-align:left}
+  }
 </style>
 </head>
 <body>
-  <form class="card" id="form" autocomplete="on">
-    <h1>BytePlus Kuromi 平台</h1>
-    <div class="sub">请登录后查看授信与消费数据</div>
+<div class="split">
 
-    <div class="msg" id="msg"></div>
-
-    <label for="u">用户名</label>
-    <input id="u" name="username" autocomplete="username" required autofocus>
-
-    <label for="p">密码</label>
-    <input id="p" name="password" type="password" autocomplete="current-password" required>
-
-    <button type="submit" id="btn">登录</button>
-
-    <div class="note" id="note">
-      凭据只保存在当前标签页（<code>sessionStorage</code>），关闭标签页即自动登出。
+  <section class="hero">
+    <div class="hero-top">
+      <img src="/static/Kuromi_Icon_100px_20260828.png" alt="">
+      <div>
+        <h2>BytePlus <span class="accent">Kuromi</span> 平台</h2>
+        <p>多账号授信与消费看板 · 授信额度 / 余额 / 已用 / 当期消费</p>
+      </div>
     </div>
-  </form>
+    <img class="shot" src="/static/Seedance_Login_20260828.png" alt="">
+  </section>
+
+  <section class="formside">
+    <form class="card" id="form" autocomplete="on">
+      <div class="form-brand">
+        <img src="/static/Kuromi_Icon_50px_20260828.png" alt="">
+        <b>BytePlus Kuromi 平台</b>
+      </div>
+
+      <h1>登录</h1>
+
+      <div class="msg" id="msg"></div>
+
+      <label for="u">用户名</label>
+      <input id="u" name="username" type="text" autocomplete="username" required autofocus>
+
+      <label for="p">密码</label>
+      <div class="pw">
+        <input id="p" name="password" type="password" autocomplete="current-password" required>
+        <button type="button" class="eye" id="eye" aria-label="显示密码" title="显示密码">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+        </button>
+      </div>
+
+      <button type="submit" id="btn">登录</button>
+    </form>
+  </section>
+
+</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -115,6 +179,15 @@ function safeReturnTo(){
     else sessionStorage.removeItem(KEY);
   }catch(e){ /* 网络问题就正常显示登录表单 */ }
 })();
+
+// 明文/密文切换。只改 type，值不经过任何中转。
+$('eye').addEventListener('click', () => {
+  const p = $('p');
+  const show = p.type === 'password';
+  p.type = show ? 'text' : 'password';
+  $('eye').title = $('eye').ariaLabel = show ? '隐藏密码' : '显示密码';
+  p.focus();
+});
 
 $('form').addEventListener('submit', async ev => {
   ev.preventDefault();
