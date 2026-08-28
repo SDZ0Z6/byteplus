@@ -173,9 +173,10 @@ export Ali_Secret="你的AccessKeySecret"
 
 ### `file://` 打开页面报 `PERIOD_RE is not defined`
 
-编辑器直接预览磁盘上的 `detail.html` 时，`/common.js` 解析成 `file:///common.js`
-加载失败，于是所有共用函数都未定义。**页面必须经服务器访问**，它还依赖
-`/api/detail`。console 里看到 `file:///...` 开头的报错直接忽略。
+编辑器直接预览磁盘上的 `bill.html` 时，`/common.js` 和 `/app.css` 解析成
+`file:///common.js`、`file:///app.css` 加载失败，于是所有共用函数都未定义、
+页面还没样式。**页面必须经服务器访问**，它还依赖 `/api/detail`。
+console 里看到 `file:///...` 开头的报错直接忽略。
 
 ### 浏览器自动化里量到「柱宽 0px、标签全截断、页面横向滚动」
 
@@ -185,6 +186,24 @@ export Ali_Secret="你的AccessKeySecret"
 ```
 resize_window(width=1280, height=900)
 ```
+
+### 浏览器自动化里量到「侧边栏收起了但宽度不变」
+
+预览面板没显示时页面**不产帧**，于是 CSS transition 一启动就永远停在起始值 ——
+而运行中的 transition 优先级高于普通声明，所以连 `!important` 之外的规则都压不过它。
+表现：`data-side` 已经变成 `mini`、`display:none` 的文字也确实隐藏了（那条没有过渡），
+但 `.side` 的 `width` 死活还是 216px；只有内联 `!important` 能改动它。
+
+不是 CSS 的问题。量几何前先把过渡关掉：
+
+```js
+const st = document.createElement('style');
+st.textContent = '*,*::before,*::after{transition:none !important;animation:none !important}';
+document.head.appendChild(st);
+```
+
+关掉之后实测 216 → 64 → 216 完全正常。同类陷阱见上面「柱宽 0px」那条 ——
+凡是"看着像布局 bug"，先怀疑面板没显示。
 
 ### bfcache 在自动化环境里永远不生效
 
