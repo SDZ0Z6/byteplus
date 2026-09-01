@@ -7,7 +7,8 @@
 
 ## 线上地址
 
-<https://kuromicloud.top/> —— 阿里云 ECS（马来西亚·吉隆坡）+ nginx + Let's Encrypt。
+自有域名 + 阿里云 ECS（马来西亚·吉隆坡）+ nginx + Let's Encrypt。
+**真实域名和服务器 IP 不写进仓库**，文档里用 `<域名>` / `<服务器IP>` 占位。
 部署步骤见 [deploy/DEPLOY.md](deploy/DEPLOY.md)，踩坑与遗留项见
 [deploy/DEPLOY-NOTES.md](deploy/DEPLOY-NOTES.md)。
 

@@ -12,8 +12,9 @@
 **停用(软删除)**、**新增账号(先实调接口验证密钥才写 cred.xlsx)**。
 界面固定 **Light Mode**，主色 `#1664ff`。
 
-纯 Python 标准库 + `openpyxl`，**没有 Web 框架**。线上
-<https://kuromicloud.top/>（阿里云 ECS 马来西亚 + nginx + Let's Encrypt）。
+纯 Python 标准库 + `openpyxl`，**没有 Web 框架**。
+线上跑在阿里云 ECS（马来西亚）+ nginx + Let's Encrypt 上；**真实域名和 IP 不入库**，
+文档里用 `$DOMAIN` / `$SERVER_IP`、`<域名>` / `<服务器IP>` 占位。
 
 ```bash
 python app/server.py --open     # 本机跑；无 config.json 时只监听回环、不启用登录

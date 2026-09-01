@@ -1,8 +1,18 @@
 # 部署到阿里云 ECS（域名 + HTTPS）
 
-当前线上：**<https://kuromicloud.top/>**
-
 这份文档既是现有部署的记录，也是重建步骤。
+
+> **真实域名和服务器 IP 不写进仓库。** 文档里一律用占位符：
+>
+> * shell 命令里用 `$DOMAIN` / `$SERVER_IP` —— 照抄之前先在本地 shell 里 export
+>   一次，命令就能直接粘贴：
+>
+>   ```bash
+>   export DOMAIN=你的域名  SERVER_IP=你的服务器IP
+>   ```
+>
+> * 表格和 nginx 配置片段里用 `<域名>` / `<服务器IP>` —— nginx 不会展开环境变量，
+>   那些地方要填字面值。
 
 ## 现状速查
 
@@ -11,7 +21,7 @@
 | ECS 地域 | `ap-southeast-8`（马来西亚·吉隆坡）—— **境外节点，不需要 ICP 备案** |
 | 系统 | Alibaba Cloud Linux 4（`platform:alnx4`，Anolis 系） |
 | Python | 3.11.6 + openpyxl 3.1.5 |
-| 域名 | `kuromicloud.top` → `43.107.53.16` |
+| 域名 / IP | `<域名>` → `<服务器IP>`（真实值不入库，见文档开头的占位符约定） |
 | 反代 | nginx 1.30.2（`alinux4-updates` 仓库） |
 | 证书 | Let's Encrypt，acme.sh v3.1.5 签发，存 `/etc/nginx/ssl/billing.{crt,key}` |
 | 续期 | acme.sh 自带 cron，每天 4 次（02:58 / 08:58 / 14:58 / 20:58） |
@@ -73,8 +83,8 @@ git checkout -f -b main origin/main
 scp 到 root 会让它变成 `644 root:root`：
 
 ```bash
-scp cred.xlsx root@43.107.53.16:/opt/byteplus-billing/ && \
-ssh root@43.107.53.16 "chown byteplus:byteplus /opt/byteplus-billing/cred.xlsx && chmod 600 /opt/byteplus-billing/cred.xlsx"
+scp cred.xlsx root@$SERVER_IP:/opt/byteplus-billing/ && \
+ssh root@$SERVER_IP "chown byteplus:byteplus /opt/byteplus-billing/cred.xlsx && chmod 600 /opt/byteplus-billing/cred.xlsx"
 ```
 
 ### 4. 写配置
@@ -129,10 +139,10 @@ sudo systemctl status byteplus-billing
 任意注册商都行。**境外节点不需要备案**；在阿里云买则仍需域名实名认证
 （和备案不是一回事，通常几小时）。
 
-加一条 A 记录指向 `43.107.53.16`，然后确认生效：
+加一条 A 记录指向 `<服务器IP>`，然后确认生效：
 
 ```bash
-nslookup kuromicloud.top
+nslookup $DOMAIN
 ```
 
 用 Cloudflare 的话先保持「仅 DNS」（灰云），别开代理 —— 否则签发和真实 IP 传递都要多绕一层。
@@ -166,7 +176,7 @@ sh /tmp/acme-install.sh email=你的邮箱
 ```nginx
 server {
     listen 80;
-    server_name kuromicloud.top;
+    server_name <域名>;
 
     location /.well-known/acme-challenge/ { root /var/www/acme; }
 
@@ -190,14 +200,14 @@ sudo nginx -t && sudo systemctl enable --now nginx
 acme.sh 默认走 ZeroSSL，显式指定 Let's Encrypt：
 
 ```bash
-~/.acme.sh/acme.sh --issue -d kuromicloud.top -w /var/www/acme --server letsencrypt
+~/.acme.sh/acme.sh --issue -d $DOMAIN -w /var/www/acme --server letsencrypt
 ```
 
 ### 12. 装证书 + 挂自动 reload
 
 ```bash
 sudo mkdir -p /etc/nginx/ssl
-~/.acme.sh/acme.sh --install-cert -d kuromicloud.top \
+~/.acme.sh/acme.sh --install-cert -d $DOMAIN \
   --key-file       /etc/nginx/ssl/billing.key \
   --fullchain-file /etc/nginx/ssl/billing.crt \
   --reloadcmd      "systemctl reload nginx"
@@ -212,7 +222,7 @@ sudo mkdir -p /etc/nginx/ssl
 ```nginx
 server {
     listen 80;
-    server_name kuromicloud.top;
+    server_name <域名>;
     location /.well-known/acme-challenge/ { root /var/www/acme; }
     location / { return 301 https://$host$request_uri; }
 }
@@ -220,7 +230,7 @@ server {
 server {
     listen 443 ssl;
     http2 on;
-    server_name kuromicloud.top;
+    server_name <域名>;
 
     ssl_certificate     /etc/nginx/ssl/billing.crt;
     ssl_certificate_key /etc/nginx/ssl/billing.key;
@@ -254,16 +264,16 @@ sudo nginx -t && sudo systemctl reload nginx
 ### 15. 验证
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' https://kuromicloud.top/login.html        # 200
-curl -s -o /dev/null -w '%{http_code}\n' https://kuromicloud.top/api/accounts      # 401
-curl -s -o /dev/null -w '%{http_code} -> %{redirect_url}\n' http://kuromicloud.top/ # 301 -> https://
-curl -s -m 8 -o /dev/null -w '%{http_code}\n' http://43.107.53.16:8787/            # 000 已收口
+curl -s -o /dev/null -w '%{http_code}\n' https://$DOMAIN/login.html        # 200
+curl -s -o /dev/null -w '%{http_code}\n' https://$DOMAIN/api/accounts      # 401
+curl -s -o /dev/null -w '%{http_code} -> %{redirect_url}\n' http://$DOMAIN/ # 301 -> https://
+curl -s -m 8 -o /dev/null -w '%{http_code}\n' http://$SERVER_IP:8787/     # 000 已收口
 ```
 
 TLS 检查：
 
 ```bash
-echo | openssl s_client -connect kuromicloud.top:443 -servername kuromicloud.top 2>/dev/null \
+echo | openssl s_client -connect $DOMAIN:443 -servername $DOMAIN 2>/dev/null \
   | grep -E "Protocol|Cipher|Verify return code"
 ```
 
@@ -330,8 +340,8 @@ git reset --hard <sha> && systemctl restart byteplus-billing
 **权限修正必须跟上** —— scp 到 root 会把它重置成 `644 root:root`：
 
 ```bash
-scp cred.xlsx root@43.107.53.16:/opt/byteplus-billing/ && \
-ssh root@43.107.53.16 "chown byteplus:byteplus /opt/byteplus-billing/cred.xlsx && chmod 600 /opt/byteplus-billing/cred.xlsx"
+scp cred.xlsx root@$SERVER_IP:/opt/byteplus-billing/ && \
+ssh root@$SERVER_IP "chown byteplus:byteplus /opt/byteplus-billing/cred.xlsx && chmod 600 /opt/byteplus-billing/cred.xlsx"
 ```
 
 ### 改登录密码
