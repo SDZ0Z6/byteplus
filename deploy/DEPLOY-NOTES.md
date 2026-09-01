@@ -3,6 +3,9 @@
 [DEPLOY.md](DEPLOY.md) 是「怎么做」，这份是「为什么这么做」和「踩过什么」。
 遇到怪现象先翻这里，很多已经有解释。
 
+> 下文命令里的 `$DOMAIN` / `$SERVER_IP` 是占位符（真实域名和 IP 不入库）。
+> 照抄前先 `export DOMAIN=你的域名  SERVER_IP=你的服务器IP`。
+
 ---
 
 ## ⚠ 待办
@@ -98,8 +101,8 @@ allow_reuse_address = (os.name != "nt")
 所以传完必须跟一条修正，写成一行别拆开：
 
 ```bash
-scp cred.xlsx root@43.107.53.16:/opt/byteplus-billing/ && \
-ssh root@43.107.53.16 "chown byteplus:byteplus /opt/byteplus-billing/cred.xlsx && chmod 600 /opt/byteplus-billing/cred.xlsx"
+scp cred.xlsx root@$SERVER_IP:/opt/byteplus-billing/ && \
+ssh root@$SERVER_IP "chown byteplus:byteplus /opt/byteplus-billing/cred.xlsx && chmod 600 /opt/byteplus-billing/cred.xlsx"
 ```
 
 ### 部署时的原子切换
@@ -128,7 +131,7 @@ listen [::]:443 ssl;
 ### 2. 证书在公开 CT 日志里，会被扫
 
 Let's Encrypt 签发的证书会进 Certificate Transparency 公开日志，扫描器盯着它 ——
-域名上线几分钟内就有陌生 IP 来摸（已观测到 `35.165.215.140` 摸 `/login.html`
+域名上线几分钟内就有陌生 IP 来摸（实测有境外 IP 摸 `/login.html`
 和 `/api/accounts`，拿到 401）。
 
 属正常现象，不必紧张。但这意味着**登录密码强度和失败锁定是真正的防线**：
@@ -149,7 +152,7 @@ python3 -c "import secrets;print(secrets.token_urlsafe(24))"
 ```bash
 export Ali_Key="你的AccessKeyId"
 export Ali_Secret="你的AccessKeySecret"
-~/.acme.sh/acme.sh --issue --dns dns_ali -d kuromicloud.top --server letsencrypt
+~/.acme.sh/acme.sh --issue --dns dns_ali -d $DOMAIN --server letsencrypt
 ```
 
 代价是要给 acme.sh 一对阿里云 AK/SK。
