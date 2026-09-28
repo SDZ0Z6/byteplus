@@ -270,6 +270,13 @@ curl -s -o /dev/null -w '%{http_code} -> %{redirect_url}\n' http://$DOMAIN/ # 30
 curl -s -m 8 -o /dev/null -w '%{http_code}\n' http://$SERVER_IP:8787/     # 000 已收口
 ```
 
+塔台一键登录（`POST /login`）。故意用错密码 —— 算一次失败登录（8 次才锁），
+但不用把真密码敲进 shell 历史：
+
+```bash
+curl -s -o /dev/null -w '%{http_code} -> %{redirect_url}\n' -d 'username=x&password=y' https://$DOMAIN/login   # 302 -> https://<域名>/login.html?err=1
+```
+
 TLS 检查：
 
 ```bash
@@ -349,6 +356,9 @@ ssh root@$SERVER_IP "chown byteplus:byteplus /opt/byteplus-billing/cred.xlsx && 
 改 `config.json` 后 `sudo systemctl restart byteplus-billing`。
 `config.json` 不在仓库里，`git pull` 不会碰它。
 
+**同一时间通知塔台改他们存的那份。** 不同步的话每次一键登录都算一次失败登录，
+同一个出口 IP 攒够 8 次，手工登录的人也会被一起锁 5 分钟。
+
 **缓存疑似算错**（删掉重启会重新扫）：
 
 ```bash
@@ -361,7 +371,11 @@ sudo systemctl restart byteplus-billing
 ```bash
 sudo journalctl -u byteplus-billing -f
 sudo journalctl -u byteplus-billing | grep 认证失败      # 撞库痕迹
+sudo journalctl -u byteplus-billing | grep '/login '    # 塔台一键登录: POST 200 成功 / 302 失败
 ```
+
+一键登录出问题时，按日志里的状态码对照 [DEPLOY-NOTES](DEPLOY-NOTES.md) 的
+「塔台一键登录失败」那张表。
 
 ---
 
