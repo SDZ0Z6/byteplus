@@ -389,6 +389,7 @@ AK 重复几乎一定是复制粘贴错了（一把 AK 只属于一个账号）�
 | `POST /api/account/status` | **是** | 启用/停用（软删除） |
 | `/api/detail` | **是** | 明细数据 |
 | `/api/verify` | **是** | 供登录页校验凭据，不返回业务数据 |
+| `POST /login` | 自带校验 | 塔台一键登录：收表单凭据，校验同 `/api/verify`，见[下文](#塔台一键登录post-login) |
 | `/api/health` | 否 | 给监控用，不返回业务数据 |
 
 细节：
@@ -420,6 +421,53 @@ AK 重复几乎一定是复制粘贴错了（一把 AK 只属于一个账号）�
 > 为什么把凭据放 `sessionStorage` 而不是签名 token：服务端因此完全无状态，
 > 且在 HTTPS 下两者抗嗅探能力相同。token 的额外收益只在明文信道里才体现，
 > 而明文信道本身已经被 HTTPS 解决了。
+
+### 塔台一键登录（`POST /login`）
+
+塔台在用户浏览器里自动提交一个表单过来（`application/x-www-form-urlencoded`，
+字段 `username` / `password`）。表单带不上 `Authorization` 头，所以凭据走请求体：
+
+| 情况 | 响应 |
+|---|---|
+| 校验通过 | `200` 一小段 HTML：把 token 写进 `sessionStorage`，再 `location.replace("/")`。之后就和从登录页进来的完全一样 |
+| 用户名或密码错 | `302` → `/login.html?err=1`（这个值是和塔台约定的） |
+| 该 IP 正在锁定中 | `302` → `/login.html?err=2` |
+| 不是 urlencoded 表单 | `415` JSON —— 集成写错了，**不计**失败次数 |
+
+* **校验就是 `/api/verify` 那一套**（`Handler._check_credentials()`）：同一个比较函数、
+  同一个失败计数。两条路径撞密码会累计到同一个 IP 的锁定上，谁也绕不开谁。
+* token 按 `login.html` 的算法拼（`base64(utf8(username + ':' + password))`），再拿
+  **它本身**去走 Basic 校验 —— 验过的就是要存进去的那一串，不会出现「这里通过了、
+  之后每个请求却 401」。
+* 写进页面时按塔台要求做了 JSON 转义，**另外再把 `< > &` 转成 `<` 这类转义**
+  （`_js_str()`）：光靠 `json.dumps` 挡不住值里的 `</script>` —— HTML 解析先于 JS，
+  引号拦不住结束标签。token 是 base64，本来就只有 `A-Z a-z 0-9 + / =`，这层是纵深防御。
+* 成功页带着凭据，所以是 **`no-store`**。这是「页面文档不能 no-store」那条的唯一
+  例外，并不冲突：它立刻被 `replace` 掉，本来就进不了 bfcache。用 `replace`
+  而不是赋值，是为了这个 POST 结果页不留在历史记录里。
+* **没有 CSRF token、没有验证码，是有意的**（塔台的要求：自动提交的表单带不上）。
+  这不会让它比 `/api/verify` 好攻破 —— 不知道密码照样进不来；全站只有一个共享账号，
+  「把受害者登录成攻击者的账号」（login CSRF）也无从谈起。
+  真正多出来的只有一点：任何网站都能让访客的浏览器往这里提交错误密码，把那个
+  出口 IP 锁 5 分钟。以前做不到 —— 跨站 `fetch` 要带 `Authorization` 头就得先过
+  CORS 预检，而本服务不处理 `OPTIONS`（实测 `OPTIONS /api/verify 501`，真正的请求
+  根本没发出来）。要堵的话可以按 `Origin` 头只放行塔台的域名，这不是 CSRF token，
+  自动提交照样能过 —— **前提是塔台页面没设 `Referrer-Policy: no-referrer`**：
+  实测设了之后浏览器发的是 `Origin: null`，白名单会把塔台自己也挡掉。
+* **改登录密码要同步给塔台。** 它存着这份密码；不同步的话每次一键登录都算一次
+  失败，同一个出口 IP 攒够 8 次，手工登录的人也会一起被锁 5 分钟。
+
+给塔台的集成要求（前三条是拿浏览器实测出来的）：
+
+* 地址必须写 **`https://<域名>/login`**。写成 `http://` 会被 nginx 301 到 https，而
+  浏览器跟 301 时会把 POST 改成 GET、丢掉表单体 —— 用户最后停在一个
+  `{"error": "需要用户名和密码"}` 的页面上，应用日志里只看到一条 `GET /login 401`。
+* 必须**顶层打开**（当前标签页或新标签页），不能提交进 iframe：所有响应都带
+  `X-Frame-Options: DENY`。那种情况下服务端校验照样通过（日志里是
+  `POST /login 200`），但页面被浏览器拦下，token 写不进去。
+* 密码若含非 ASCII 字符，塔台的页面必须是 UTF-8（或 `<form accept-charset="utf-8">`），
+  否则浏览器按页面编码（比如 GBK）提交，正确的密码也会被判错。纯 ASCII 密码无所谓。
+* `method="post"`。GET 会把密码放进 URL，进 nginx 访问日志。
 
 ## 安全说明
 

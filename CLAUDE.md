@@ -74,6 +74,12 @@ python app/server.py --open     # 本机跑；无 config.json 时只监听回环
    `/bill.html`、`/accounts.html`、`/common.js`、`/app.css`；写操作是
    `POST /api/account/add` 和 `POST /api/account/status`（**先读完请求体再校验
    凭据** —— 反过来会让 401 响应和未读的请求体在 keep-alive 连接上错位）；
+   `POST /login` 是塔台一键登录，**唯一不走 `Authorization` 头的认证入口**：
+   在 `_authorized()` 之前分流，但必须调同一个 `_check_credentials()`
+   （同一个失败计数和锁定 —— 别给它另写一套校验，那等于开了个不限次数的撞库口）。
+   它的成功页由服务端生成、往 sessionStorage 写 `bp_auth`，所以这个键名现在
+   三处共用：`common.js` 的 `AUTH_KEY`、`login.html` 的 `KEY`、`server.py` 的
+   `AUTH_STORAGE_KEY`，改一处漏一处，一键登录就会静默失效（登录后被弹回登录页）；
    图片走 `/static/<文件名>` —— 这是
    **唯一按文件名取文件的入口**，防护全在 `_serve_static()`：文件名正则只放过
    一层普通文件名、**故意不做 unquote**（`%2e%2e` 因此进不来；先解码再校验等于
@@ -83,6 +89,8 @@ python app/server.py --open     # 本机跑；无 config.json 时只监听回环
    应全部 404；`/cred.xlsx`、`/.git/config`、`/config.json` 应 401。
 5. **页面文档不能带 `Cache-Control: no-store`** —— Chrome 会因此禁用 bfcache，
    从明细页返回总览会整页重查。页面用 `REVALIDATE`，业务数据用 `NO_STORE`。
+   **唯一例外是 `POST /login` 的成功页**：它带着 token，必须 `NO_STORE`。两条不冲突 ——
+   那一页立刻被 `location.replace` 掉，本来就进不了 bfcache。别"统一"成 `REVALIDATE`。
 6. **明细合计必须等于概览合计**，页脚显式标 ✓/⚠。这是这个功能的信任锚点，
    `/api/detail` 会额外查一次概览来自对账（明细页拿不到总览那份数据）。
 7. **`allow_reuse_address` 必须按平台取值** `(os.name != "nt")`。两个平台的
@@ -130,6 +138,7 @@ python app/server.py --open     # 本机跑；无 config.json 时只监听回环
 | 消费列 | 纯展示**不可点**；下钻入口是**账号名**（行尾「明细 ›」按钮已按要求删除） |
 | 日消费图 | **当天应付合计**，不拆按量/包月（拆过一版，被要求合并 —— 明细表的「计费方式」列已逐行说明） |
 | 部署方式 | **`git pull` + `systemctl restart` 两条命令**，不要部署脚本（明确拒绝过） |
+| 塔台一键登录 | `POST /login` 收 urlencoded 表单（`username` / `password`），成功回 HTML 写 sessionStorage 跳 `/`，失败 302 `/login.html?err=1`（这个值是和塔台约定的）。**不加 CSRF token / 验证码** —— 塔台明确要求，自动提交的表单带不上，别"顺手补上"。安全论证和给塔台的集成要求见 README「塔台一键登录」 |
 | 原授信额度来源 | 用「余额 + 累计消费」推算，不在表里手填 |
 
 ## 部署

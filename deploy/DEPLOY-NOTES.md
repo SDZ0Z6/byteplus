@@ -251,3 +251,19 @@ Chrome 在**附加了调试器**时禁用 bfcache，而浏览器自动化正是�
 systemctl is-active byteplus-billing
 curl -sf -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/api/health
 ```
+
+### 塔台一键登录失败
+
+先 `journalctl -u byteplus-billing | grep '/login '` 看状态码，再对表。每一行都是
+拿浏览器 + 模拟的塔台页（另一个源、自动提交表单）实测出来的：
+
+| 用户看到 | 应用日志 | 原因 |
+|---|---|---|
+| 一行 `{"error": "需要用户名和密码"}` | `GET /login 401`（**GET**，不是 POST） | 塔台的地址写成了 `http://`：nginx 301 到 https 时，浏览器把 POST 改成 GET、丢了表单体 |
+| 登录页「用户名或密码错误」 | `认证失败` + `POST /login 302` | 密码不对（多半是这边改了密码、塔台没同步）；或者密码含中文而塔台页面不是 UTF-8 |
+| 登录页「尝试次数过多」 | `POST /login 302`，前面有一串 `认证失败` | 该出口 IP 被锁 5 分钟。塔台存的密码过期时，几次一键登录就能攒够 8 次 |
+| 空白，或 iframe 里一个报错页 | `POST /login 200`，**后面没有 `GET /`** | 表单提交进了 iframe，被 `X-Frame-Options: DENY` 拦下 —— 服务端校验是过了的 |
+| 一段 `415` JSON | `POST /login 415` | 表单不是 urlencoded（比如写成了 `multipart/form-data`） |
+
+Chrome 拦 iframe 时控制台报的是 `Refused to display 'https://<域名>/'` —— 只打出源，
+**不是**真的跳到了 `/`。判断页面脚本到底跑没跑，看应用日志里有没有紧跟着的 `GET /`。

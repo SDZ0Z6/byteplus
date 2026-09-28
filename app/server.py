@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime
 import io
 import ipaddress
@@ -28,7 +29,7 @@ import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 # 允许 `python app/server.py` 直接运行
@@ -79,6 +80,29 @@ MAX_WORKERS = 4
 # nginx 反代跑在本机，所以是回环地址；直连的客户端一律按真实 peer 处理。
 TRUSTED_PROXY_IPS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
 
+# 塔台一键登录(POST /login)。塔台在用户浏览器里自动提交表单，带不上
+# Authorization 头，所以凭据走表单体；校验通过后回一小段 HTML，把 token 写进
+# sessionStorage 再跳首页 —— 从那以后就和从 login.html 登录的完全一样。
+# 键名必须和 common.js 的 AUTH_KEY、login.html 的 KEY 一致，改一处要改三处。
+AUTH_STORAGE_KEY = "bp_auth"
+# 失败时 302 回 /login.html?err=<码>，login.html 按码显示提示
+LOGIN_ERR_BAD = "1"         # 用户名或密码错误(这个值是和塔台约定的)
+LOGIN_ERR_LOCKED = "2"      # 失败次数过多，该 IP 临时锁定中
+
+# 登录成功页: 只存 token、跳首页。用 location.replace 而不是赋值 —— 这个
+# POST 结果页不能留在历史记录里，否则按返回键会回到它，浏览器要么弹
+# 「确认重新提交表单」，要么把登录再重放一遍。
+FORM_LOGIN_PAGE = """<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>登录中…</title></head>
+<body>
+<noscript>需要启用 JavaScript 才能登录。</noscript>
+<script>
+try{ sessionStorage.setItem(%(key)s, %(token)s); }catch(e){}
+location.replace("/");
+</script>
+</body></html>
+"""
+
 # 运行时状态(main() 里填)
 CFG: Dict[str, Any] = {}
 HISTORY: Optional[billing.History] = None
@@ -92,6 +116,19 @@ def _is_ip(value: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _js_str(value: str) -> str:
+    """字符串 -> 能直接嵌进 <script> 的 JS 字符串字面量。
+
+    只做 json.dumps **不够**: 它不转义 <，值里要是有 "</script>"，HTML 解析器
+    会把它当成脚本结束标签 —— HTML 这一层先于 JS 解析，JS 字符串的引号挡不住。
+    所以再把 < > & 换成 \\u 转义: 在 JS 字符串里语义不变，HTML 解析器却再也
+    认不出标签。ensure_ascii 顺带把 U+2028/2029 也转义了。
+    """
+    return (json.dumps(value, ensure_ascii=True)
+            .replace("<", "\\u003c").replace(">", "\\u003e")
+            .replace("&", "\\u0026"))
 
 
 def utc_now_iso() -> str:
@@ -302,25 +339,38 @@ class Handler(BaseHTTPRequestHandler):
         return peer
 
     # ---- 认证 ----
-    def _authorized(self) -> bool:
+    def _check_credentials(self, header: Optional[str]) -> Tuple[str, float]:
+        """判定一份 Basic 凭据: ("ok" | "locked" | "denied", 剩余锁定秒数)。
+
+        **不发响应** —— Basic 头(_authorized)和表单登录(_form_login)共用这一套
+        判定和同一个失败计数，只是各自回不同的响应。所以两条路径撞密码会累计到
+        同一个 IP 的锁定上，谁也绕不开谁。
+        """
         if not config.auth_enabled(CFG):
-            return True
+            return "ok", 0.0
 
         ip = self.client_ip()
         locked = THROTTLE.locked_for(ip)
         if locked > 0:
+            return "locked", locked
+
+        if auth.verify(header, CFG["username"], CFG["password"]):
+            THROTTLE.record_success(ip)
+            return "ok", 0.0
+
+        if header:
+            THROTTLE.record_failure(ip)
+            self.log_message("认证失败 from %s", ip)
+        return "denied", 0.0
+
+    def _authorized(self) -> bool:
+        verdict, locked = self._check_credentials(self.headers.get("Authorization"))
+        if verdict == "ok":
+            return True
+        if verdict == "locked":
             self._json(429, {"error": "尝试次数过多，请 {} 秒后再试".format(
                 int(locked) + 1)}, {"Retry-After": str(int(locked) + 1)})
             return False
-
-        if auth.verify(self.headers.get("Authorization"),
-                       CFG["username"], CFG["password"]):
-            THROTTLE.record_success(ip)
-            return True
-
-        if self.headers.get("Authorization"):
-            THROTTLE.record_failure(ip)
-            self.log_message("认证失败 from %s", ip)
         # 故意**不发** WWW-Authenticate: 一旦发了，浏览器会抢先弹它自己的原生
         # 登录框，login.html 就没机会显示了。curl -u 是抢先发凭据的，不依赖
         # 这个挑战头，所以脚本/监控照样能用。
@@ -377,7 +427,7 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_POST(self) -> None:  # noqa: N802
-        """写操作。目前只有账号管理那两个。
+        """写操作(账号管理那两个) + 塔台一键登录(/login)。
 
         **顺序是: 先读完请求体，再校验凭据。** 反过来的话，401 响应发出去时
         请求体还堵在连接里，HTTP/1.1 的 keep-alive 会把它当成下一个请求的
@@ -389,6 +439,12 @@ class Handler(BaseHTTPRequestHandler):
         body = self._read_body()
         if body is None:
             return
+
+        # 表单登录的凭据在请求体里、不在 Authorization 头里，所以必须赶在
+        # _authorized() 之前分流 —— 它自己走同一套校验
+        if path == "/login":
+            return self._form_login(body)
+
         if not self._authorized():
             return
 
@@ -424,6 +480,51 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             self.close_connection = True
             return None
+
+    def _form_login(self, body: bytes) -> None:
+        """POST /login —— 塔台一键登录。
+
+        塔台在用户浏览器里自动提交表单(x-www-form-urlencoded，字段 username /
+        password)。成功回一小段 HTML，把 token 写进 sessionStorage 再跳首页；
+        失败 302 回 /login.html?err=<码>。校验就是 /api/verify 那一套
+        (_check_credentials): 同一个比较函数、同一个失败计数和锁定。
+
+        **没有 CSRF token / 验证码是有意的**(塔台的要求): 自动提交的表单带不上。
+        这不会让它比 /api/verify 更好攻破 —— 不知道密码照样进不来；而全站只有
+        一个共享账号，"把受害者登录成攻击者的账号"(login CSRF)在这里无从谈起。
+        """
+        ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0]
+        if ctype.strip().lower() != "application/x-www-form-urlencoded":
+            # 这是集成写错了(比如表单写成了 multipart)，不算一次登录失败。
+            # 直接报清楚，比 302 回登录页显示"密码错误"好排查得多
+            return self._json(415, {
+                "error": "只接受 application/x-www-form-urlencoded 表单"})
+
+        form = parse_qs(body.decode("utf-8", "replace"))
+        username = (form.get("username") or [""])[0]
+        password = (form.get("password") or [""])[0]
+
+        # 和 login.html 的 b64utf8(user + ':' + pass) 一模一样地拼 token，再拿它
+        # 去走 Basic 校验 —— 验过的就是要存进 sessionStorage 的那一串，不会出现
+        # "这里验通过了、之后每个请求却都 401"。
+        token = base64.b64encode(
+            (username + ":" + password).encode("utf-8")).decode("ascii")
+        verdict, _ = self._check_credentials("Basic " + token)
+        if verdict == "locked":
+            return self._redirect("/login.html?err=" + LOGIN_ERR_LOCKED)
+        if verdict != "ok":
+            return self._redirect("/login.html?err=" + LOGIN_ERR_BAD)
+
+        page = FORM_LOGIN_PAGE % {"key": _js_str(AUTH_STORAGE_KEY),
+                                  "token": _js_str(token)}
+        # 页面里带着凭据，所以必须 no-store(_send 的默认值)。和"页面文档不能
+        # no-store"那条不冲突: 这一页立刻就被 replace 掉，本来就不进 bfcache，
+        # 而它绝不能落进磁盘缓存。
+        self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
+
+    def _redirect(self, location: str) -> None:
+        # 相对地址即可: 浏览器按请求地址解析，经 nginx 反代也不用知道域名
+        self._send(302, b"", "text/plain; charset=utf-8", {"Location": location})
 
     def _parse_json(self, body: bytes) -> Optional[Dict[str, Any]]:
         try:
